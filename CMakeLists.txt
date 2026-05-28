@@ -21,7 +21,8 @@ find_package(nlohmann_json REQUIRED)
 # Library target
 add_library(oai-api SHARED
   src/client.cpp
-  src/agent.cpp)
+  src/agent.cpp
+  src/builder.cpp)
 target_compile_features(oai-api PUBLIC cxx_std_23)
 
 target_include_directories(oai-api PUBLIC

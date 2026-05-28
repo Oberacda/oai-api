@@ -6,11 +6,7 @@
 
 #include "oai-api/types.hpp"
 
-namespace oai {
-
-// ---------------------------------------------------------------------------
-// ClientConfig
-// ---------------------------------------------------------------------------
+namespace oai::detail {
 
 struct ClientConfig
 {
@@ -21,27 +17,32 @@ struct ClientConfig
   int max_tokens{4096};
 };
 
+} // namespace oai::detail
+
+namespace oai {
+
 // ---------------------------------------------------------------------------
 // OpenAIClient
 //
 // Thin synchronous HTTP client for the /chat/completions endpoint.
 // Uses cpr for HTTP and nlohmann/json for serialization.
+// Construct via ClientBuilder.
 // ---------------------------------------------------------------------------
 
 class OpenAIClient
 {
 public:
-  explicit OpenAIClient(ClientConfig config);
+  explicit OpenAIClient(detail::ClientConfig config);
 
   // Send a chat completion request and block until the response arrives.
   // Returns the parsed CompletionResponse or an ApiError.
   [[nodiscard]] std::expected<CompletionResponse, ApiError>
   complete(const std::vector<Message>& messages, const std::vector<ToolDefinition>& tools = {});
 
-  [[nodiscard]] const ClientConfig& config() const { return m_config; }
+  [[nodiscard]] const detail::ClientConfig& config() const { return m_config; }
 
 private:
-  ClientConfig m_config;
+  detail::ClientConfig m_config;
 };
 
 } // namespace oai

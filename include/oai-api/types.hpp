@@ -76,22 +76,6 @@ struct Message
   std::vector<ToolCall> tool_calls;        // set on assistant messages that request tools
 };
 
-// Convenience constructors
-inline Message systemMessage(std::string text)
-{
-  return {Role::SYSTEM, {TextBlock{std::move(text)}}, {}, {}, {}};
-}
-
-inline Message userMessage(std::string text)
-{
-  return {Role::USER, {TextBlock{std::move(text)}}, {}, {}, {}};
-}
-
-inline Message userMessage(std::vector<ContentBlock> blocks)
-{
-  return {Role::USER, std::move(blocks), {}, {}, {}};
-}
-
 // ---------------------------------------------------------------------------
 // Completion response
 // ---------------------------------------------------------------------------

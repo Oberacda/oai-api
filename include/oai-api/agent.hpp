@@ -9,17 +9,17 @@
 #include "oai-api/tool.hpp"
 #include "oai-api/types.hpp"
 
-namespace oai {
-
-// ---------------------------------------------------------------------------
-// AgentConfig
-// ---------------------------------------------------------------------------
+namespace oai::detail {
 
 struct AgentConfig
 {
   std::string system_prompt;
   int max_steps{10}; // max tool-call rounds before giving up
 };
+
+} // namespace oai::detail
+
+namespace oai {
 
 // ---------------------------------------------------------------------------
 // Agent
@@ -29,12 +29,14 @@ struct AgentConfig
 //   2. Call the LLM
 //   3. If the model requests tool calls, dispatch them and feed results back
 //   4. Repeat until finish_reason == "stop" or max_steps exceeded
+//
+// Construct via AgentBuilder.
 // ---------------------------------------------------------------------------
 
 class Agent
 {
 public:
-  Agent(AgentConfig config, OpenAIClient client, ToolRegistry tools = {});
+  Agent(detail::AgentConfig config, OpenAIClient client, ToolRegistry tools = {});
 
   // Run a task to completion and return the final answer string.
   // The conversation history is preserved across calls; use reset() to clear it.
@@ -50,7 +52,7 @@ public:
   void setTools(ToolRegistry tools) { m_tools = std::move(tools); }
 
 private:
-  AgentConfig m_config;
+  detail::AgentConfig m_config;
   OpenAIClient m_client;
   ToolRegistry m_tools;
   std::vector<Message> m_history;

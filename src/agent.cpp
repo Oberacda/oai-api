@@ -4,7 +4,7 @@
 
 namespace oai {
 
-Agent::Agent(AgentConfig config, OpenAIClient client, ToolRegistry tools)
+Agent::Agent(detail::AgentConfig config, OpenAIClient client, ToolRegistry tools)
   : m_config{std::move(config)}
   , m_client{std::move(client)}
   , m_tools{std::move(tools)}
@@ -16,10 +16,10 @@ std::expected<std::string, ApiError> Agent::run(std::string_view task)
   // Seed history with the system prompt on first call.
   if (m_history.empty() && !m_config.system_prompt.empty())
   {
-    m_history.push_back(systemMessage(m_config.system_prompt));
+    m_history.push_back(Message{Role::SYSTEM, {TextBlock{m_config.system_prompt}}, {}, {}, {}});
   }
 
-  m_history.push_back(userMessage(std::string{task}));
+  m_history.push_back(Message{Role::USER, {TextBlock{std::string{task}}}, {}, {}, {}});
 
   const auto DEFS = m_tools.definitions();
 

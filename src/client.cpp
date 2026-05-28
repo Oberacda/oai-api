@@ -188,7 +188,7 @@ static std::expected<CompletionResponse, ApiError> parseResponse(int http_status
 // OpenAIClient implementation
 // ---------------------------------------------------------------------------
 
-OpenAIClient::OpenAIClient(ClientConfig config)
+OpenAIClient::OpenAIClient(detail::ClientConfig config)
   : m_config{std::move(config)}
 {
 }
