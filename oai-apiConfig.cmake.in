@@ -1,0 +1,14 @@
+# - Config file for the oai-api package
+# It defines the following variables
+#  oai-api_INCLUDE_DIRS - include directories for FooBar
+#  oai-api_LIBRARIES    - libraries to link against
+#  oai-api_EXECUTABLE   - the bar executable
+
+set(oai-api_INCLUDE_DIRS "@CONF_INCLUDE_DIRS@")
+
+# Our library dependencies (contains definitions for IMPORTED targets)
+include("${oai-api_DIR}/export_oai-api.cmake")
+
+# These are IMPORTED targets created by oai-apiTargets.cmake
+
+
