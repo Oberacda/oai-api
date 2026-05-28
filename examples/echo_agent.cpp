@@ -76,7 +76,7 @@ int main() {
     // Create a small synthetic test image (100x100 green square).
     cv::Mat test_img(100, 100, CV_8UC3, cv::Scalar(0, 200, 0));
 
-    auto img_block = oai::encode_image(test_img);
+    auto img_block = oai::encodeImage(test_img);
     if (!img_block) {
         std::println("encode_image failed: {}", img_block.error());
         return 1;
@@ -104,8 +104,8 @@ int main() {
         .model    = "llama3.2-vision",
     }};
     auto vis_resp = vis_client.complete({
-        oai::system_message("You are a vision assistant."),
-        oai::user_message(std::move(vision_content))
+        oai::systemMessage("You are a vision assistant."),
+        oai::userMessage(std::move(vision_content))
     });
 
     if (vis_resp) {
