@@ -6,8 +6,14 @@
 
 set(oai-api_INCLUDE_DIRS "@CONF_INCLUDE_DIRS@")
 
+# Find our dependencies
+find_package(cpr REQUIRED)
+find_package(fmt REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(nlohmann_json REQUIRED)
+
 # Our library dependencies (contains definitions for IMPORTED targets)
-include("${oai-api_DIR}/export_oai-api.cmake")
+include("${oai-api_DIR}/oai-apiTargets.cmake")
 
 # These are IMPORTED targets created by oai-apiTargets.cmake
 
