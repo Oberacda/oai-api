@@ -37,15 +37,14 @@ Include the single umbrella header:
 ### Plain chat completion
 
 ```cpp
-oai::OpenAIClient client{oai::ClientConfig{
-    .base_url    = "http://localhost:11434/v1", // Ollama; use "https://api.openai.com/v1" for OpenAI
-    .api_key     = "",                          // leave empty for local Ollama
-    .model       = "llama3.2",
-    .temperature = 0.7f,
-    .max_tokens  = 1024,
-}};
+auto client = oai::ClientBuilder{}
+    .baseUrl("http://localhost:11434/v1")  // Ollama; use "https://api.openai.com/v1" for OpenAI
+    .model("llama3.2")
+    .temperature(0.7f)
+    .maxTokens(1024)
+    .build();
 
-auto result = client.complete({oai::userMessage("What is 2 + 2?")});
+auto result = client.complete({oai::MessageBuilder::user().text("What is 2 + 2?").build().value()});
 if (result) {
     std::println("{}", result->choice.content.value_or(""));
 } else {
@@ -56,28 +55,21 @@ if (result) {
 ### Tool / function calling
 
 ```cpp
-oai::ToolRegistry tools;
-tools.add(oai::FunctionTool{
-    .definition = {
-        .name                   = "get_weather",
-        .description            = "Returns the current temperature for a city.",
-        .parameters_schema_json = R"({
-            "type": "object",
-            "properties": { "city": { "type": "string" } },
-            "required": ["city"]
-        })",
-    },
-    .handler = [](std::string_view args) -> std::expected<std::string, std::string> {
-        // parse args, call your weather API, return result string
-        return "22°C, sunny";
-    },
-});
-
-oai::Agent agent{
-    oai::AgentConfig{.system_prompt = "You are a helpful assistant.", .max_steps = 5},
-    std::move(client),
-    std::move(tools),
-};
+auto agent = oai::AgentBuilder{}
+    .systemPrompt("You are a helpful assistant.")
+    .maxSteps(5)
+    .client(oai::ClientBuilder{}
+        .baseUrl("http://localhost:11434/v1")
+        .model("llama3.2")
+        .build())
+    .tool("get_weather",
+          "Returns the current temperature for a city.",
+          R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
+          [](std::string_view args) -> std::expected<std::string, std::string> {
+              // parse args, call your weather API, return result string
+              return "22°C, sunny";
+          })
+    .build();
 
 auto answer = agent.run("What's the weather like in Berlin?");
 if (answer) std::println("{}", *answer);
@@ -87,47 +79,63 @@ The agent automatically runs the ReAct loop: it calls the model, dispatches any 
 
 ### Vision (multimodal)
 
-Pass a `cv::Mat` image alongside text using `encodeImage`:
+Use `MessageBuilder` to construct multimodal messages with `cv::Mat` images:
 
 ```cpp
 cv::Mat frame = cv::imread("scene.png");
 
-auto img = oai::encodeImage(frame);
-if (!img) { /* handle encoding error */ }
+auto msg = oai::MessageBuilder::user()
+    .text("Describe what you see.")
+    .image(frame)
+    .build();
+if (!msg) { /* handle encoding error */ }
 
 auto response = client.complete({
-    oai::systemMessage("You are a vision assistant."),
-    oai::userMessage({
-        oai::TextBlock{"Describe what you see."},
-        *img,
-    }),
+    oai::MessageBuilder::system().text("You are a vision assistant.").build().value(),
+    std::move(*msg),
 });
 ```
 
 Or use a URL directly, without downloading the image:
 
 ```cpp
-oai::ImageBlock img = oai::imageFromUrl("https://example.com/photo.jpg");
+auto msg = oai::MessageBuilder::user()
+    .text("What's in this image?")
+    .image(oai::imageFromUrl("https://example.com/photo.jpg"))
+    .build();
 ```
 
 ## API reference
 
-### `ClientConfig`
+### `ClientBuilder`
 
-| Field | Default | Description |
+| Method | Default | Description |
 |---|---|---|
-| `base_url` | — | API base URL, e.g. `"http://localhost:11434/v1"` |
-| `api_key` | `""` | Bearer token; omit for local endpoints |
-| `model` | — | Model name, e.g. `"gpt-4o"`, `"llama3.2-vision"` |
-| `temperature` | `0.7` | Sampling temperature |
-| `max_tokens` | `4096` | Maximum completion tokens |
+| `baseUrl(url)` | — | API base URL, e.g. `"http://localhost:11434/v1"` |
+| `apiKey(key)` | `""` | Bearer token; omit for local endpoints |
+| `model(name)` | — | Model name, e.g. `"gpt-4o"`, `"llama3.2-vision"` |
+| `temperature(t)` | `0.7` | Sampling temperature |
+| `maxTokens(n)` | `4096` | Maximum completion tokens |
 
-### `AgentConfig`
+### `AgentBuilder`
 
-| Field | Default | Description |
+| Method | Default | Description |
 |---|---|---|
-| `system_prompt` | `""` | Injected as the first system message |
-| `max_steps` | `10` | Maximum tool-call rounds before returning an error |
+| `systemPrompt(prompt)` | `""` | Injected as the first system message |
+| `maxSteps(steps)` | `10` | Maximum tool-call rounds before returning an error |
+| `client(c)` | — | Provide the `OpenAIClient` (required) |
+| `tool(name, desc, schema, handler)` | — | Register a tool with inline handler |
+| `tools(registry)` | — | Replace all tools with a pre-built `ToolRegistry` |
+
+### `MessageBuilder`
+
+| Method | Description |
+|---|---|
+| `user()`, `system()`, `assistant()` | Static factory for the role |
+| `text(value)` | Append a text content block |
+| `image(mat)` | Encode a `cv::Mat` as base64 PNG |
+| `image(block)` | Append a pre-built `ImageBlock` (URL or encoded) |
+| `build()` | Returns `std::expected<Message, std::string>` |
 
 ### Error handling
 
