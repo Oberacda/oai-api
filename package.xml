@@ -10,7 +10,7 @@
   <depend>cpr</depend>
   <depend>fmt</depend>
   <depend>opencv</depend>
-  <depend>nlohmann-json</depend>
+  <depend>nlohmann-json-dev</depend>
 
   <export>
     <build_type>cmake</build_type>
