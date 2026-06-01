@@ -7,7 +7,7 @@
   <maintainer email="developer@oberacker.me">David Oberacker</maintainer>
   <license>BSD-3-Clause</license>
 
-  <depend>cpr</depend>
+  <depend>curl</depend>
   <depend>fmt</depend>
   <depend>libopencv-dev</depend>
   <depend>nlohmann-json-dev</depend>

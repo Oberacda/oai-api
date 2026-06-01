@@ -12,6 +12,13 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+include(FetchContent)
+set(CPR_USE_SYSTEM_CURL ON CACHE BOOL "" FORCE)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+FetchContent_Declare(cpr GIT_REPOSITORY https://github.com/libcpr/cpr.git
+                         GIT_TAG  1.14.2)
+FetchContent_MakeAvailable(cpr)
+
 # find dependencies
 find_package(cpr REQUIRED)
 find_package(fmt REQUIRED)
