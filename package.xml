@@ -9,7 +9,7 @@
 
   <depend>cpr</depend>
   <depend>fmt</depend>
-  <depend>opencv</depend>
+  <depend>libopencv-dev</depend>
   <depend>nlohmann-json-dev</depend>
 
   <export>
