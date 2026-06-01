@@ -1,4 +1,4 @@
-#include "oai-api/client.hpp"
+#include "oai_api/client.hpp"
 
 #include <cpr/cpr.h>
 #include <fmt/core.h>

@@ -6,7 +6,7 @@
 #include <fmt/core.h>
 #include <opencv2/core.hpp>
 
-#include <oai-api/oai_api.hpp>
+#include <oai_api/oai_api.hpp>
 
 static std::string utc_now()
 {

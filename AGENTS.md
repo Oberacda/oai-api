@@ -12,7 +12,7 @@ This package lives inside a ROS 2 / colcon workspace at `../../..` relative to t
 
 ```bash
 cd ~/repos/semantic_perception_ws
-colcon build --packages-select oai-api
+colcon build --packages-select oai_api
 ```
 
 Plain CMake (standalone, no ROS tooling):
@@ -30,7 +30,7 @@ After a colcon build, source the workspace and run the bundled echo agent:
 
 ```bash
 source install/setup.bash
-./build/oai-api/echo_agent
+./build/oai_api/echo_agent
 ```
 
 The example targets a local Ollama instance at `http://localhost:11434/v1` with model `llama3.2`. Edit `examples/echo_agent.cpp` to point at a different endpoint or model.
@@ -49,7 +49,7 @@ The example targets a local Ollama instance at `http://localhost:11434/v1` with 
 
 ## Architecture
 
-All public API lives under `include/oai-api/`; implementations are in `src/`. Include everything via the umbrella header `<oai-api/oai_api.hpp>`.
+All public API lives under `include/oai_api/`; implementations are in `src/`. Include everything via the umbrella header `<oai_api/oai_api.hpp>`.
 
 ### Layer overview
 

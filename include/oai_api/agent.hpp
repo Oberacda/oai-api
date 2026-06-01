@@ -5,9 +5,9 @@
 #include <string_view>
 #include <vector>
 
-#include "oai-api/client.hpp"
-#include "oai-api/tool.hpp"
-#include "oai-api/types.hpp"
+#include "oai_api/client.hpp"
+#include "oai_api/tool.hpp"
+#include "oai_api/types.hpp"
 
 namespace oai::detail {
 

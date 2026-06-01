@@ -16,7 +16,7 @@ A C++23 library for talking to OpenAI-compatible LLM APIs — including local mo
 **Inside the ROS 2 / colcon workspace (recommended):**
 
 ```bash
-colcon build --packages-select oai-api
+colcon build --packages-select oai_api
 ```
 
 **Standalone CMake:**
@@ -31,7 +31,7 @@ cmake --build build -j$(nproc)
 Include the single umbrella header:
 
 ```cpp
-#include <oai-api/oai_api.hpp>
+#include <oai_api/oai_api.hpp>
 ```
 
 ### Plain chat completion

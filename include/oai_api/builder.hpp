@@ -1,6 +1,6 @@
 #pragma once
 
-// oai-api/builder.hpp
+// oai_api/builder.hpp
 // Fluent builder API for Message, OpenAIClient, and Agent.
 
 #include <expected>
@@ -11,10 +11,10 @@
 
 #include <opencv2/core.hpp>
 
-#include "oai-api/agent.hpp"
-#include "oai-api/client.hpp"
-#include "oai-api/tool.hpp"
-#include "oai-api/types.hpp"
+#include "oai_api/agent.hpp"
+#include "oai_api/client.hpp"
+#include "oai_api/tool.hpp"
+#include "oai_api/types.hpp"
 
 namespace oai {
 

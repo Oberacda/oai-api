@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "oai-api/types.hpp"
+#include "oai_api/types.hpp"
 
 namespace oai {
 
