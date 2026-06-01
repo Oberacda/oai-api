@@ -1,9 +1,9 @@
 #include <chrono>
 #include <ctime>
-#include <print>
 #include <string>
 #include <string_view>
 
+#include <fmt/core.h>
 #include <opencv2/core.hpp>
 
 #include <oai-api/oai_api.hpp>
@@ -42,15 +42,15 @@ int main()
   // ------------------------------------------------------------------
   // 2. Run a task
   // ------------------------------------------------------------------
-  std::println("--- Task: time query ---");
+  fmt::print("--- Task: time query ---\n");
   auto answer = agent.run("What is the current UTC time?");
   if (answer)
   {
-    std::println("Answer: {}", *answer);
+    fmt::print("Answer: {}\n", *answer);
   }
   else
   {
-    std::println("Error ({}): {}", answer.error().http_status, answer.error().message);
+    fmt::print("Error ({}): {}\n", answer.error().http_status, answer.error().message);
     return 1;
   }
 
@@ -58,7 +58,7 @@ int main()
   // 3. Vision example — multimodal message via MessageBuilder
   //    (requires a vision-capable model such as llama3.2-vision)
   // ------------------------------------------------------------------
-  std::println("\n--- Task: vision query ---");
+  fmt::print("\n--- Task: vision query ---\n");
 
   cv::Mat test_img(100, 100, CV_8UC3, cv::Scalar(0, 200, 0));
 
@@ -68,7 +68,7 @@ int main()
                       .build();
   if (!vision_msg)
   {
-    std::println("Image encode failed: {}", vision_msg.error());
+    fmt::print("Image encode failed: {}\n", vision_msg.error());
     return 1;
   }
 
@@ -84,11 +84,11 @@ int main()
 
   if (vis_resp)
   {
-    std::println("Vision answer: {}", vis_resp->choice.content.value_or("(no content)"));
+    fmt::print("Vision answer: {}\n", vis_resp->choice.content.value_or("(no content)"));
   }
   else
   {
-    std::println("Vision error ({}): {}", vis_resp.error().http_status, vis_resp.error().message);
+    fmt::print("Vision error ({}): {}\n", vis_resp.error().http_status, vis_resp.error().message);
   }
 
   return 0;
