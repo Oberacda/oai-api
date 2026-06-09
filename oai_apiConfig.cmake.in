@@ -11,6 +11,7 @@ find_package(cpr REQUIRED)
 find_package(fmt REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # Our library dependencies (contains definitions for IMPORTED targets)
 include("${oai_api_DIR}/oai_apiTargets.cmake")

@@ -51,6 +51,9 @@ public:
   // Replace the tool registry after construction.
   void setTools(ToolRegistry tools) { m_tools = std::move(tools); }
 
+  // Check that the backing server is reachable and the configured model is available.
+  [[nodiscard]] std::expected<void, ApiError> isHealthy() { return m_client.isHealthy(); }
+
 private:
   detail::AgentConfig m_config;
   OpenAIClient m_client;

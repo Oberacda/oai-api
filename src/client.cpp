@@ -193,6 +193,52 @@ OpenAIClient::OpenAIClient(detail::ClientConfig config)
 {
 }
 
+std::expected<void, ApiError> OpenAIClient::isHealthy()
+{
+  cpr::Header headers{{"Accept", "application/json"}};
+  if (!m_config.api_key.empty())
+  {
+    headers["Authorization"] = fmt::format("Bearer {}", m_config.api_key);
+  }
+
+  const std::string URL = m_config.base_url + "/models";
+  const auto CPR_RESP   = cpr::Get(cpr::Url{URL}, headers);
+
+  if (CPR_RESP.error.code != cpr::ErrorCode::OK)
+  {
+    return std::unexpected{
+      ApiError{.http_status = 0, .message = fmt::format("HTTP error: {}", CPR_RESP.error.message)}};
+  }
+
+  if (CPR_RESP.status_code < 200 || CPR_RESP.status_code >= 300)
+  {
+    return std::unexpected{
+      ApiError{.http_status = static_cast<int>(CPR_RESP.status_code),
+               .message     = fmt::format("server returned {}", CPR_RESP.status_code)}};
+  }
+
+  try
+  {
+    const auto J = json::parse(CPR_RESP.text);
+    for (const auto& model : J.at("data"))
+    {
+      if (model.value("id", "") == m_config.model)
+      {
+        return {};
+      }
+    }
+  }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{
+      ApiError{.http_status = 0, .message = fmt::format("JSON parse error: {}", e.what())}};
+  }
+
+  return std::unexpected{
+    ApiError{.http_status = 0,
+             .message     = fmt::format("model '{}' not found on server", m_config.model)}};
+}
+
 std::expected<CompletionResponse, ApiError>
 OpenAIClient::complete(const std::vector<Message>& messages,
                        const std::vector<ToolDefinition>& tools)

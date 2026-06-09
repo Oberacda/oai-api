@@ -21,11 +21,12 @@ FetchContent_MakeAvailable(cpr)
 
 # find dependencies
 find_package(fmt REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # Library target
-add_library(oai_api SHARED
+add_library(oai_api STATIC
   src/client.cpp
   src/agent.cpp
   src/builder.cpp)
@@ -38,6 +39,7 @@ target_include_directories(oai_api PUBLIC
 target_link_libraries(oai_api PUBLIC
   cpr::cpr
   fmt::fmt
+  ZLIB::ZLIB
   nlohmann_json::nlohmann_json
   ${OpenCV_LIBS})
 

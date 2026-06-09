@@ -39,6 +39,10 @@ public:
   [[nodiscard]] std::expected<CompletionResponse, ApiError>
   complete(const std::vector<Message>& messages, const std::vector<ToolDefinition>& tools = {});
 
+  // Check that the server is reachable and the configured model is listed.
+  // Returns an error describing the first problem found.
+  [[nodiscard]] std::expected<void, ApiError> isHealthy();
+
   [[nodiscard]] const detail::ClientConfig& config() const { return m_config; }
 
 private:
