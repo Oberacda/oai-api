@@ -3,6 +3,7 @@
 // oai_api/builder.hpp
 // Fluent builder API for Message, OpenAIClient, and Agent.
 
+#include <chrono>
 #include <expected>
 #include <optional>
 #include <string>
@@ -55,8 +56,8 @@ public:
 private:
   explicit MessageBuilder(Role role);
 
-  Role                       m_role;
-  std::vector<ContentBlock>  m_content;
+  Role m_role;
+  std::vector<ContentBlock> m_content;
   std::optional<std::string> m_error;
 };
 
@@ -82,6 +83,8 @@ public:
   ClientBuilder& model(std::string name);
   ClientBuilder& temperature(float t);
   ClientBuilder& maxTokens(int n);
+  ClientBuilder& connectTimeout(std::chrono::milliseconds timeout);
+  ClientBuilder& requestTimeout(std::chrono::milliseconds timeout);
 
   [[nodiscard]] OpenAIClient build();
 
@@ -119,8 +122,8 @@ public:
 
   // Register a tool inline.
   template <ToolCallable THandler>
-  AgentBuilder& tool(std::string name, std::string description, std::string schema_json,
-                     THandler&& handler)
+  AgentBuilder&
+  tool(std::string name, std::string description, std::string schema_json, THandler&& handler)
   {
     m_tools.add(FunctionTool::make(
       ToolDefinition{std::move(name), std::move(description), std::move(schema_json)},
@@ -135,9 +138,9 @@ public:
   [[nodiscard]] Agent build();
 
 private:
-  detail::AgentConfig         m_cfg;
+  detail::AgentConfig m_cfg;
   std::optional<OpenAIClient> m_client;
-  ToolRegistry                m_tools;
+  ToolRegistry m_tools;
 };
 
 } // namespace oai

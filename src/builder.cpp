@@ -1,5 +1,7 @@
 #include "oai_api/builder.hpp"
 
+#include <algorithm>
+
 namespace oai {
 
 // ---------------------------------------------------------------------------
@@ -92,6 +94,18 @@ ClientBuilder& ClientBuilder::temperature(float t)
 ClientBuilder& ClientBuilder::maxTokens(int n)
 {
   m_cfg.max_tokens = n;
+  return *this;
+}
+
+ClientBuilder& ClientBuilder::connectTimeout(std::chrono::milliseconds timeout)
+{
+  m_cfg.connect_timeout = std::max(timeout, std::chrono::milliseconds{1});
+  return *this;
+}
+
+ClientBuilder& ClientBuilder::requestTimeout(std::chrono::milliseconds timeout)
+{
+  m_cfg.request_timeout = std::max(timeout, std::chrono::milliseconds{1});
   return *this;
 }
 

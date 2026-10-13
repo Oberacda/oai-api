@@ -202,7 +202,10 @@ std::expected<void, ApiError> OpenAIClient::isHealthy()
   }
 
   const std::string URL = m_config.base_url + "/models";
-  const auto CPR_RESP   = cpr::Get(cpr::Url{URL}, headers);
+  const auto CPR_RESP   = cpr::Get(cpr::Url{URL},
+                                 headers,
+                                 cpr::ConnectTimeout{m_config.connect_timeout},
+                                 cpr::Timeout{m_config.request_timeout});
 
   if (CPR_RESP.error.code != cpr::ErrorCode::OK)
   {
@@ -234,9 +237,8 @@ std::expected<void, ApiError> OpenAIClient::isHealthy()
       ApiError{.http_status = 0, .message = fmt::format("JSON parse error: {}", e.what())}};
   }
 
-  return std::unexpected{
-    ApiError{.http_status = 0,
-             .message     = fmt::format("model '{}' not found on server", m_config.model)}};
+  return std::unexpected{ApiError{
+    .http_status = 0, .message = fmt::format("model '{}' not found on server", m_config.model)}};
 }
 
 std::expected<CompletionResponse, ApiError>
@@ -275,8 +277,12 @@ OpenAIClient::complete(const std::vector<Message>& messages,
     headers["Authorization"] = fmt::format("Bearer {}", m_config.api_key);
   }
 
-  const std::string URL   = m_config.base_url + "/chat/completions";
-  const auto CPR_RESP     = cpr::Post(cpr::Url{URL}, headers, cpr::Body{body.dump()});
+  const std::string URL = m_config.base_url + "/chat/completions";
+  const auto CPR_RESP   = cpr::Post(cpr::Url{URL},
+                                  headers,
+                                  cpr::Body{body.dump()},
+                                  cpr::ConnectTimeout{m_config.connect_timeout},
+                                  cpr::Timeout{m_config.request_timeout});
 
   if (CPR_RESP.error.code != cpr::ErrorCode::OK)
   {

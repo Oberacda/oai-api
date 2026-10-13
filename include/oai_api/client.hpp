@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <expected>
 #include <string>
 #include <vector>
@@ -15,6 +16,8 @@ struct ClientConfig
   std::string model;    // e.g. "gpt-4o", "llama3.2-vision"
   float temperature{0.7F};
   int max_tokens{4096};
+  std::chrono::milliseconds connect_timeout{5000};
+  std::chrono::milliseconds request_timeout{60000};
 };
 
 } // namespace oai::detail
