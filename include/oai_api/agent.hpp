@@ -52,16 +52,13 @@ public:
   void setTools(ToolRegistry tools) { m_tools = std::move(tools); }
 
   // Check that the backing server is reachable and the configured model is available.
-  [[nodiscard]] std::expected<void, ApiError> isHealthy() { return m_client.isHealthy(); }
+  [[nodiscard]] std::expected<void, ApiError> isHealthy() const { return m_client.isHealthy(); }
 
 private:
   detail::AgentConfig m_config;
   OpenAIClient m_client;
   ToolRegistry m_tools;
   std::vector<Message> m_history;
-
-  // Append an assistant message that carries tool_calls back into history.
-  void pushAssistantToolCalls(const CompletionResponse& resp);
 };
 
 } // namespace oai

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <string>
@@ -7,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
@@ -19,6 +21,7 @@ namespace oai {
 enum class Role
 {
   SYSTEM,
+  DEVELOPER,
   USER,
   ASSISTANT,
   TOOL
@@ -30,18 +33,25 @@ enum class Role
 
 struct TextBlock
 {
-  std::string text;
+  std::string text{};
 };
 
 struct ImageBlock
 {
   // Exactly one of (base64_data+mime_type) or url must be set.
   std::string base64_data; // base64-encoded image bytes
-  std::string mime_type;   // "image/png" | "image/jpeg"
-  std::string url;         // HTTPS URL (alternative to base64)
+  std::string mime_type{}; // "image/png" | "image/jpeg"
+  std::string url{};       // HTTPS URL (alternative to base64)
 };
 
-using ContentBlock = std::variant<TextBlock, ImageBlock>;
+// Structured JSON evidence (Responses/Decisions `input_json`). Chat completions has no JSON part,
+// so it is sent there as dumped text.
+struct JsonBlock
+{
+  nlohmann::json data{};
+};
+
+using ContentBlock = std::variant<TextBlock, ImageBlock, JsonBlock>;
 
 // ---------------------------------------------------------------------------
 // Tool call / definition  (defined before Message so Message can use them)
@@ -49,18 +59,18 @@ using ContentBlock = std::variant<TextBlock, ImageBlock>;
 
 struct ToolCall
 {
-  std::string id;
-  std::string function_name;
-  std::string arguments_json; // raw JSON string from the API
+  std::string id{};
+  std::string function_name{};
+  std::string arguments_json{}; // raw JSON string from the API
 };
 
 struct ToolDefinition
 {
-  std::string name;
-  std::string description;
+  std::string name{};
+  std::string description{};
   // JSON Schema object describing parameters, e.g.:
   // {"type":"object","properties":{"x":{"type":"number"}},"required":["x"]}
-  std::string parameters_schema_json;
+  std::string parameters_schema_json{};
 };
 
 // ---------------------------------------------------------------------------
@@ -69,40 +79,40 @@ struct ToolDefinition
 
 struct Message
 {
-  Role role;
-  std::vector<ContentBlock> content;
-  std::optional<std::string> tool_call_id; // set when role == Tool
-  std::optional<std::string> name;         // tool name, when role == Tool
-  std::vector<ToolCall> tool_calls;        // set on assistant messages that request tools
+  Role role{};
+  std::vector<ContentBlock> content{};
+  std::optional<std::string> tool_call_id{}; // set when role == Tool
+  std::optional<std::string> name{};         // tool name, when role == Tool
+  std::vector<ToolCall> tool_calls{};        // set on assistant messages that request tools
 };
 
 // ---------------------------------------------------------------------------
-// Completion response
+// Usage / models / errors
 // ---------------------------------------------------------------------------
 
-struct CompletionChoice
+// Token accounting. Chat-style (prompt/completion) and Responses-style (input/output) names are
+// both mapped onto input/output.
+struct Usage
 {
-  std::string finish_reason;          // "stop" | "tool_calls"
-  std::optional<std::string> content; // present when finish_reason == "stop"
-  std::vector<ToolCall> tool_calls;   // present when finish_reason == "tool_calls"
+  int input_tokens{};
+  int output_tokens{};
+  int total_tokens{};
+  int cached_tokens{};
 };
 
-struct CompletionResponse
+struct Model
 {
-  std::string id;
-  CompletionChoice choice;
-  int prompt_tokens{};
-  int completion_tokens{};
+  std::string id{};
+  std::string owned_by{};
+  std::int64_t created{};
 };
-
-// ---------------------------------------------------------------------------
-// Error
-// ---------------------------------------------------------------------------
 
 struct ApiError
 {
-  int http_status{};
-  std::string message;
+  int http_status{}; // 0 for transport / parse errors
+  std::string message{};
+  std::string type{}; // error.type from the API body, if any
+  std::string code{}; // error.code from the API body, if any
 };
 
 // ---------------------------------------------------------------------------
@@ -113,7 +123,7 @@ struct ApiError
 // Returns an error string on failure.
 inline std::expected<ImageBlock, std::string> encodeImage(const cv::Mat& image)
 {
-  std::vector<uchar> buf;
+  std::vector<uchar> buf{};
   if (!cv::imencode(".png", image, buf))
   {
     return std::unexpected{"cv::imencode failed"};
@@ -122,7 +132,7 @@ inline std::expected<ImageBlock, std::string> encodeImage(const cv::Mat& image)
   static constexpr std::string_view K_ALPHABET =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-  std::string encoded;
+  std::string encoded{};
   encoded.reserve(((buf.size() + 2) / 3) * 4);
 
   for (std::size_t i = 0; i < buf.size(); i += 3)
