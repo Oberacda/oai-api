@@ -98,6 +98,7 @@ struct Usage
   int output_tokens{};
   int total_tokens{};
   int cached_tokens{};
+  std::optional<double> cost{}; // OpenRouter: credits charged
 };
 
 struct Model

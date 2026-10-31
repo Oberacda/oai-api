@@ -509,7 +509,14 @@ std::expected<DecisionResponse, ApiError> OpenAIClient::decide(const DecisionReq
     m_config,
     "/decisions",
     [&] { return detail::decisionRequestToJson(request, m_config); },
-    detail::parseDecisionResponse);
+    [&](const json& j) {
+      std::vector<std::string> order;
+      for (const auto& q : request.questions)
+      {
+        order.push_back(std::visit([](const auto& question) { return question.name; }, q));
+      }
+      return detail::parseDecisionResponse(j, order);
+    });
 }
 
 std::expected<json, ApiError>

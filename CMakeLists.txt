@@ -48,6 +48,9 @@ target_link_libraries(oai_api PUBLIC
 add_executable(echo_agent examples/echo_agent.cpp)
 target_link_libraries(echo_agent PRIVATE oai_api)
 
+add_executable(decisions_test examples/decisions_test.cpp)
+target_link_libraries(decisions_test PRIVATE oai_api)
+
 # Tests (no network): serialization, extra_body merging, SSE parsing
 include(CTest)
 if(BUILD_TESTING)

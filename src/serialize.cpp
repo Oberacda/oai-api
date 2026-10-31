@@ -1,6 +1,7 @@
 #include "serialize.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <type_traits>
 #include <utility>
 
@@ -216,6 +217,10 @@ Usage parseUsage(const json& j)
   u.total_tokens  = j.value("total_tokens", u.input_tokens + u.output_tokens);
   u.cached_tokens = j.value("/input_tokens_details/cached_tokens"_json_pointer,
                             j.value("/prompt_tokens_details/cached_tokens"_json_pointer, 0));
+  if (j.contains("cost") && j["cost"].is_number())
+  {
+    u.cost = j["cost"].get<double>();
+  }
   return u;
 }
 
@@ -635,78 +640,170 @@ std::vector<ImageResult> parseImages(const json& j)
 // Decisions
 // ---------------------------------------------------------------------------
 
-json decisionRequestToJson(const DecisionRequest& req, const ClientConfig& cfg)
-{
-  json body;
-  body["model"] = modelOr(req.model, cfg);
-  body["input"] = inputToJson(req.input);
+namespace {
 
-  json questions = json::array();
-  for (const auto& q : req.questions)
-  {
-    questions.push_back(std::visit(
-      [](const auto& question) -> json {
-        using T = std::decay_t<decltype(question)>;
-        json out{{"name", question.name},
-                 {"instructions", instructionsToJson(question.instructions)}};
-        if constexpr (std::is_same_v<T, PredicateQuestion>)
-        {
-          out["type"] = "predicate";
-        }
-        else if constexpr (std::is_same_v<T, ChoiceQuestion>)
-        {
-          out["type"]    = "choice";
-          out["choices"] = json::array();
-          for (const auto& c : question.choices)
-          {
-            out["choices"].push_back({{"value", c.value}, {"description", c.description}});
-          }
-        }
-        else
-        {
-          out["type"]   = "score";
-          out["levels"] = json::array();
-          for (const auto& l : question.levels)
-          {
-            out["levels"].push_back({{"label", l.label}, {"description", l.description}});
-          }
-        }
-        return out;
-      },
-      q));
-  }
-  body["questions"] = std::move(questions);
-  setIf(body, "prompt_cache_key", req.prompt_cache_key);
-  applyExtraBody(body, cfg.extra_body, req.extra_body);
-  return body;
+// OpenRouter state / instructions item: text as plain string, images as image_url parts, JSON
+// as-is.
+json openRouterPart(const ContentBlock& block)
+{
+  return std::visit(
+    [](const auto& b) -> json {
+      using T = std::decay_t<decltype(b)>;
+      if constexpr (std::is_same_v<T, TextBlock>)
+      {
+        return b.text;
+      }
+      else if constexpr (std::is_same_v<T, ImageBlock>)
+      {
+        return {{"type", "image_url"}, {"image_url", {{"url", imageUrl(b)}}}};
+      }
+      else
+      {
+        return b.data;
+      }
+    },
+    block);
 }
 
-DecisionResponse parseDecisionResponse(const json& j)
+json openRouterInstructions(const DecisionInstructions& instructions)
 {
-  DecisionResponse resp;
-  resp.usage = parseUsage(j.value("usage", json{}));
-
-  const auto OPT_DOUBLE = [](const json& obj, const char* key) -> std::optional<double> {
-    if (obj.contains(key) && obj[key].is_number())
-    {
-      return obj[key].get<double>();
-    }
-    return std::nullopt;
-  };
-
-  for (const auto& a : j.at("answers"))
+  if (const auto* s = std::get_if<std::string>(&instructions))
   {
-    DecisionAnswer ans;
-    ans.type        = a.value("type", "");
-    ans.name        = a.value("name", "");
-    ans.probability = OPT_DOUBLE(a, "probability");
-    ans.score       = OPT_DOUBLE(a, "score");
-    ans.confidence  = OPT_DOUBLE(a, "confidence");
-    if (a.contains("choice") && a["choice"].is_string())
+    return *s;
+  }
+  json arr = json::array();
+  for (const auto& block : std::get<std::vector<ContentBlock>>(instructions))
+  {
+    arr.push_back(openRouterPart(block));
+  }
+  return arr;
+}
+
+json openRouterState(const std::variant<std::string, std::vector<Message>>& input)
+{
+  if (const auto* s = std::get_if<std::string>(&input))
+  {
+    return *s;
+  }
+  json arr = json::array();
+  for (const auto& msg : std::get<std::vector<Message>>(input))
+  {
+    for (const auto& block : msg.content)
     {
-      ans.choice = a["choice"].get<std::string>();
+      arr.push_back(openRouterPart(block));
     }
-    for (const auto& p : a.value("probabilities", json::array()))
+  }
+  return arr;
+}
+
+std::string levelGuidance(const DecisionLevel& level)
+{
+  if (level.description.empty())
+  {
+    return level.label;
+  }
+  return level.label.empty() ? level.description : level.label + ": " + level.description;
+}
+
+json openAiQuestion(const DecisionQuestion& q)
+{
+  return std::visit(
+    [](const auto& question) -> json {
+      using T = std::decay_t<decltype(question)>;
+      json out{{"name", question.name},
+               {"instructions", instructionsToJson(question.instructions)}};
+      if constexpr (std::is_same_v<T, PredicateQuestion>)
+      {
+        out["type"] = "predicate";
+      }
+      else if constexpr (std::is_same_v<T, ChoiceQuestion>)
+      {
+        out["type"]    = "choice";
+        out["choices"] = json::array();
+        for (const auto& c : question.choices)
+        {
+          out["choices"].push_back({{"value", c.value}, {"description", c.description}});
+        }
+      }
+      else
+      {
+        out["type"]   = "score";
+        out["levels"] = json::array();
+        for (const auto& l : question.levels)
+        {
+          out["levels"].push_back({{"label", l.label}, {"description", l.description}});
+        }
+      }
+      return out;
+    },
+    q);
+}
+
+json openRouterQuestion(const DecisionQuestion& q)
+{
+  return std::visit(
+    [](const auto& question) -> json {
+      using T = std::decay_t<decltype(question)>;
+      json out{{"instructions", openRouterInstructions(question.instructions)}};
+      if constexpr (std::is_same_v<T, PredicateQuestion>)
+      {
+        out["type"]     = "noul";
+        out["criteria"] = {{"true", question.true_criteria}, {"false", question.false_criteria}};
+      }
+      else if constexpr (std::is_same_v<T, ChoiceQuestion>)
+      {
+        out["type"]     = "choice";
+        out["criteria"] = json::object();
+        for (const auto& c : question.choices)
+        {
+          out["criteria"][c.value] = c.description.empty() ? json(nullptr) : json(c.description);
+        }
+      }
+      else
+      {
+        out["type"]     = "score";
+        out["criteria"] = json::array();
+        for (const auto& l : question.levels)
+        {
+          out["criteria"].push_back(levelGuidance(l));
+        }
+      }
+      return out;
+    },
+    q);
+}
+
+std::optional<double> optDouble(const json& obj, const char* key)
+{
+  if (obj.contains(key) && obj[key].is_number())
+  {
+    return obj[key].get<double>();
+  }
+  return std::nullopt;
+}
+
+DecisionAnswer parseAnswer(const json& a, std::string name)
+{
+  DecisionAnswer ans;
+  ans.type        = a.value("type", "");
+  ans.name        = std::move(name);
+  ans.probability = optDouble(a, "probability");
+  ans.score       = optDouble(a, "score");
+  ans.confidence  = optDouble(a, "confidence");
+  if (a.contains("choice") && a["choice"].is_string())
+  {
+    ans.choice = a["choice"].get<std::string>();
+  }
+  if (ans.type == "noul") // OpenRouter yes/no -> predicate
+  {
+    ans.type        = "predicate";
+    ans.probability = optDouble(a, "noul");
+  }
+
+  const auto& probs = a.value("probabilities", json{});
+  if (probs.is_array()) // OpenAI: [{value, label?, probability}]
+  {
+    for (const auto& p : probs)
     {
       DecisionProbability prob;
       const auto& value = p.value("value", json{});
@@ -722,7 +819,99 @@ DecisionResponse parseDecisionResponse(const json& j)
       prob.probability = p.value("probability", 0.0);
       ans.probabilities.push_back(std::move(prob));
     }
-    resp.answers.push_back(std::move(ans));
+  }
+  else if (probs.is_object()) // OpenRouter: {label: p} or {"<index>": p} + legend
+  {
+    const bool SCORE  = ans.type == "score";
+    const auto LEGEND = a.value("legend", json::object());
+    for (const auto& [key, p] : probs.items())
+    {
+      DecisionProbability prob;
+      prob.probability = p.is_number() ? p.get<double>() : 0.0;
+      if (SCORE)
+      {
+        std::from_chars(
+          key.data(), key.data() + key.size(), prob.level); // stays -1 if not a number
+        prob.label = stringOrDump(LEGEND.value(key, json{}));
+      }
+      else
+      {
+        prob.value = key;
+      }
+      ans.probabilities.push_back(std::move(prob));
+    }
+    if (SCORE)
+    {
+      std::ranges::sort(ans.probabilities, {}, &DecisionProbability::level);
+    }
+  }
+  return ans;
+}
+
+} // namespace
+
+json decisionRequestToJson(const DecisionRequest& req, const ClientConfig& cfg)
+{
+  json body;
+  body["model"] = modelOr(req.model, cfg);
+  if (req.format == DecisionFormat::OPENROUTER)
+  {
+    body["state"]     = openRouterState(req.input);
+    body["questions"] = json::object();
+    for (const auto& q : req.questions)
+    {
+      const auto& name =
+        std::visit([](const auto& question) -> const std::string& { return question.name; }, q);
+      body["questions"][name] = openRouterQuestion(q);
+    }
+  }
+  else
+  {
+    body["input"]     = inputToJson(req.input);
+    body["questions"] = json::array();
+    for (const auto& q : req.questions)
+    {
+      body["questions"].push_back(openAiQuestion(q));
+    }
+    setIf(body, "prompt_cache_key", req.prompt_cache_key);
+  }
+  applyExtraBody(body, cfg.extra_body, req.extra_body);
+  return body;
+}
+
+DecisionResponse parseDecisionResponse(const json& j, const std::vector<std::string>& order)
+{
+  DecisionResponse resp;
+  resp.id       = j.value("id", "");
+  resp.model    = j.value("model", "");
+  resp.provider = j.value("provider", "");
+  resp.usage    = parseUsage(j.value("usage", json{}));
+
+  const auto& answers = j.at("answers");
+  if (answers.is_array())
+  {
+    for (const auto& a : answers)
+    {
+      resp.answers.push_back(parseAnswer(a, a.value("name", "")));
+    }
+  }
+  else
+  {
+    // Keyed by question name; restore request order (json objects iterate alphabetically).
+    for (const auto& name : order)
+    {
+      if (answers.contains(name))
+      {
+        resp.answers.push_back(parseAnswer(answers[name], name));
+      }
+    }
+    for (const auto& [name, a] : answers.items())
+    {
+      if (std::ranges::find(order, name) == order.end())
+      {
+        resp.answers.push_back(parseAnswer(a, name));
+      }
+    }
   }
   resp.raw = j;
   return resp;

@@ -46,7 +46,8 @@ json imageRequestToJson(const ImageRequest& req, const ClientConfig& cfg);
 std::vector<ImageResult> parseImages(const json& j);
 
 json decisionRequestToJson(const DecisionRequest& req, const ClientConfig& cfg);
-DecisionResponse parseDecisionResponse(const json& j);
+// order: question names, used to restore request order for keyed (OpenRouter) answers.
+DecisionResponse parseDecisionResponse(const json& j, const std::vector<std::string>& order = {});
 
 // Incremental text/event-stream parser. feed() may be called with arbitrary byte chunks; each
 // complete event's data payload (multi-line data joined by '\n') is passed to on_data.

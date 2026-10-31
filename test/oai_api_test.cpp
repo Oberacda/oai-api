@@ -195,6 +195,71 @@ static void testDecisions()
   CHECK(RESP.usage.cached_tokens == 10);
 }
 
+static void testDecisionsOpenRouter()
+{
+  DecisionRequest req{.format = DecisionFormat::OPENROUTER, .model = "openai/gpt-6-luna-decisions"};
+  req.input     = std::vector<Message>{Message{Role::USER,
+                                               {TextBlock{"Checkout shows a blank screen."},
+                                                imageFromUrl("https://x/y.png"),
+                                                JsonBlock{{{"customer_tier", "enterprise"}}}},
+                                               {},
+                                               {},
+                                               {}}};
+  req.questions = {
+    PredicateQuestion{.name           = "is_bug",
+                      .instructions   = "Is it a defect?",
+                      .true_criteria  = "Broken behavior.",
+                      .false_criteria = "Feature request."},
+    ChoiceQuestion{.name         = "team",
+                   .instructions = "Which team?",
+                   .choices      = {{"payments", "Billing"}, {"frontend", ""}}},
+    ScoreQuestion{.name         = "urgency",
+                  .instructions = "How urgent?",
+                  .levels       = {{"Low", "Can wait"}, {"High", ""}}},
+  };
+  req.prompt_cache_key = "ignored";
+  req.extra_body       = {{"provider", {{"order", {"openai"}}}}};
+
+  const auto J = detail::decisionRequestToJson(req, makeConfig());
+  CHECK(J["model"] == "openai/gpt-6-luna-decisions");
+  CHECK(!J.contains("input") && !J.contains("prompt_cache_key"));
+  CHECK(J["state"][0] == "Checkout shows a blank screen.");
+  CHECK(J["state"][1]["image_url"]["url"] == "https://x/y.png");
+  CHECK(J["state"][2]["customer_tier"] == "enterprise");
+  CHECK(J["questions"].is_object());
+  CHECK(J["questions"]["is_bug"]["type"] == "noul");
+  CHECK(J["questions"]["is_bug"]["criteria"]["true"] == "Broken behavior.");
+  CHECK(J["questions"]["team"]["criteria"]["payments"] == "Billing");
+  CHECK(J["questions"]["team"]["criteria"]["frontend"].is_null());
+  CHECK(J["questions"]["urgency"]["criteria"][0] == "Low: Can wait");
+  CHECK(J["questions"]["urgency"]["criteria"][1] == "High");
+  CHECK(J["provider"]["order"][0] == "openai");
+
+  // Example 200 response from the OpenRouter API reference.
+  const auto RESP = detail::parseDecisionResponse(json::parse(R"({
+    "id":"gen-dec-1","model":"m","provider":"OpenAI",
+    "answers":{
+      "is_bug":{"type":"noul","noul":0.96},
+      "team":{"type":"choice","choice":"payments","confidence":0.75,
+              "probabilities":{"account":0,"frontend":0.16,"payments":0.84}},
+      "urgency":{"type":"score","score":1.99,"confidence":0.99,
+                 "probabilities":{"0":0,"1":0.01,"2":0.99},
+                 "legend":{"0":"Next release","1":"This week","2":"Now"}}},
+    "usage":{"input_tokens":476,"output_tokens":70,"cost":0.000019992}})"),
+                                                  {"urgency", "is_bug", "team"});
+  CHECK(RESP.provider == "OpenAI");
+  CHECK(RESP.answers.size() == 3);
+  CHECK(RESP.answers[0].name == "urgency"); // request order, not alphabetical
+  CHECK(RESP.answers[1].type == "predicate" && RESP.answers[1].probability.value_or(0) == 0.96);
+  CHECK(RESP.answers[2].choice.value_or("") == "payments");
+  CHECK(RESP.answers[2].probabilities.size() == 3);
+  CHECK(RESP.answers[0].score.value_or(0) == 1.99);
+  CHECK(RESP.answers[0].probabilities[2].level == 2);
+  CHECK(RESP.answers[0].probabilities[2].label == "Now");
+  CHECK(RESP.answers[0].probabilities[2].probability == 0.99);
+  CHECK(RESP.usage.input_tokens == 476 && RESP.usage.cost.value_or(0) == 0.000019992);
+}
+
 static void testErrors()
 {
   auto e = detail::parseApiError(
@@ -245,6 +310,7 @@ int main()
   testChatParsing();
   testResponses();
   testDecisions();
+  testDecisionsOpenRouter();
   testErrors();
   testSse();
   fmt::print("oai_api_test: all checks passed\n");
