@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`oai-api` is a C++23 header+source library that wraps the OpenAI `/chat/completions` API (and any OpenAI-compatible endpoint such as Ollama). It provides synchronous HTTP calls, multimodal message construction (text + base64 images), tool/function calling, and a ReAct-style agent loop.
+`oai-api` is a C++23 library for the OpenAI REST API and OpenAI-compatible servers (Ollama, vLLM, OpenRouter). Typed endpoints: chat completions (with SSE streaming), legacy completions, embeddings, models, Responses (with streaming), images, audio (transcriptions/translations/speech) and Decisions; everything else via a raw `request()` escape hatch. It also provides `std::future` async calls, multimodal message construction, tool calling, and a ReAct-style agent loop.
 
 ## Building
 
@@ -22,7 +22,7 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ```
 
-Dependencies required on the system: `cpr`, `fmt`, `nlohmann_json`, `OpenCV`.
+Dependencies required on the system: `fmt`, `nlohmann_json`, `OpenCV`, `curl`, `zlib` (`cpr` is fetched by CMake).
 
 ## Running the example
 
@@ -55,29 +55,37 @@ All public API lives under `include/oai_api/`; implementations are in `src/`. In
 
 ```
 Agent          (agent.hpp / agent.cpp)
-  └─ runs the ReAct loop: call LLM → dispatch tools → repeat until "stop"
+  └─ ReAct loop: client.chat() → dispatch tools → repeat until "stop"
   └─ owns conversation history (vector<Message>); history persists across run() calls
 
 OpenAIClient   (client.hpp / client.cpp)
-  └─ thin synchronous HTTP wrapper around /chat/completions
-  └─ uses cpr for HTTP, nlohmann/json for serialization
-  └─ handles both text and multimodal (image_url) content blocks
+  └─ one method per endpoint, all const + synchronous; async(&OpenAIClient::x, args...) → std::future
+  └─ chatStream / createResponseStream: SSE via cpr WriteCallback; callback returns false to cancel
+  └─ request(Method, path, json): untyped access to any other endpoint
+  └─ private transport helpers (auth, headers, timeouts, ApiError mapping) live in client.cpp
 
-ToolRegistry   (tool.hpp)
-  └─ owns FunctionTool objects keyed by name
-  └─ builds the tools[] array for the API request
-  └─ dispatches invocations by function name
+Request/response types (chat.hpp, responses.hpp, media.hpp, decisions.hpp)
+  └─ aggregates: unset optionals / null json are omitted from the request body
+  └─ every request has extra_body; every response keeps the parsed `raw` json
 
-Types          (types.hpp)
-  └─ Message, ContentBlock (TextBlock | ImageBlock), ToolCall, CompletionResponse, ApiError
-  └─ encodeImage(): cv::Mat → base64 PNG ImageBlock (inline, uses OpenCV imencode)
-  └─ imageFromUrl(): wraps an HTTPS URL into an ImageBlock without downloading
+Serialization  (src/serialize.hpp / serialize.cpp — internal)
+  └─ request→json and json→response per endpoint, Message → chat or Responses wire format
+  └─ SseParser (pure, unit-tested)
+
+ToolRegistry   (tool.hpp)      — FunctionTool objects keyed by name; builds tools[]; dispatches
+Types          (types.hpp)     — Message, ContentBlock (Text | Image | Json), ToolCall, Usage, Model, ApiError, image helpers
 ```
 
 ### Key design points
 
-- `OpenAIClient::complete()` is **synchronous**; it blocks until the HTTP response arrives. There is no async interface.
+- All calls are **synchronous**; `async()` copies the client and arguments into a `std::async` task (pass owning types, not `string_view`).
+- Client-level `model`, `temperature`, `max_tokens` are *defaults* applied only when the request leaves them unset.
+- `extra_body` is merge-patched into the JSON body: typed fields → client `extraBody()` → request `extra_body` (later wins, `null` deletes). Used for provider extensions such as OpenRouter `provider` routing or Ollama `options`. Extra headers go through `ClientBuilder::header()`.
 - `Agent::run()` preserves multi-turn history; call `reset()` to start a fresh conversation.
 - Tool handlers satisfy the `ToolCallable` concept: `(std::string_view args_json) -> std::expected<std::string, std::string>`. The agent surfaces tool errors as `[tool error: ...]` text rather than aborting.
-- `ImageBlock` holds either `(base64_data + mime_type)` or `url` — exactly one must be populated. `client.cpp` emits a `data:<mime>;base64,<data>` URL for the former, or a plain `image_url` object for the latter.
+- `ImageBlock` holds either `(base64_data + mime_type)` or `url` — exactly one must be populated.
 - The library uses `std::expected` throughout for error propagation; no exceptions are thrown across the public API boundary.
+
+## Tests
+
+`test/oai_api_test.cpp` covers serialization, extra_body merging, response parsing, and SSE parsing offline (no network). Run it with `ctest --test-dir build` (plain CMake) or `colcon test --packages-select oai_api`.

@@ -29,7 +29,8 @@ find_package(nlohmann_json REQUIRED)
 add_library(oai_api STATIC
   src/client.cpp
   src/agent.cpp
-  src/builder.cpp)
+  src/builder.cpp
+  src/serialize.cpp)
 target_compile_features(oai_api PUBLIC cxx_std_23)
 
 target_include_directories(oai_api PUBLIC
@@ -46,6 +47,15 @@ target_link_libraries(oai_api PUBLIC
 # Example executable
 add_executable(echo_agent examples/echo_agent.cpp)
 target_link_libraries(echo_agent PRIVATE oai_api)
+
+# Tests (no network): serialization, extra_body merging, SSE parsing
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(oai_api_test test/oai_api_test.cpp)
+  target_include_directories(oai_api_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(oai_api_test PRIVATE oai_api)
+  add_test(NAME oai_api_test COMMAND oai_api_test)
+endif()
 
 # Install
 include(GNUInstallDirs)

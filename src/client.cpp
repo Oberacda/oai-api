@@ -1,191 +1,309 @@
 #include "oai_api/client.hpp"
 
+#include <filesystem>
+
 #include <cpr/cpr.h>
 #include <fmt/core.h>
-#include <nlohmann/json.hpp>
+
+#include "serialize.hpp"
 
 namespace oai {
 
 using json = nlohmann::json;
 
-// ---------------------------------------------------------------------------
-// JSON serialisation helpers
-// ---------------------------------------------------------------------------
+namespace {
 
-static json contentBlockToJson(const ContentBlock& block)
+// Bytes of a streamed body kept for error reporting when the server answers non-2xx.
+constexpr std::size_t MAX_ERROR_BODY = std::size_t{64} * 1024;
+
+struct Endpoint
 {
-  return std::visit(
-    [](const auto& b) -> json {
-      if constexpr (std::is_same_v<std::decay_t<decltype(b)>, TextBlock>)
-      {
-        return {{"type", "text"}, {"text", b.text}};
-      }
-      else
-      {
-        // ImageBlock
-        if (!b.url.empty())
-        {
-          return {{"type", "image_url"}, {"image_url", {{"url", b.url}}}};
-        }
-        const std::string data_url = fmt::format("data:{};base64,{}", b.mime_type, b.base64_data);
-        return {{"type", "image_url"}, {"image_url", {{"url", data_url}}}};
-      }
-    },
-    block);
+  std::string_view path;
+  std::string_view content_type; // empty: let cpr set it (multipart) or no body
+  std::string_view accept;
+};
+
+void configure(cpr::Session& session, const detail::ClientConfig& cfg, const Endpoint& ep)
+{
+  const auto& [path, content_type, accept] = ep;
+  cpr::Header headers{{"Accept", std::string{accept}}};
+  if (!content_type.empty())
+  {
+    headers["Content-Type"] = std::string{content_type};
+  }
+  if (!cfg.api_key.empty())
+  {
+    headers["Authorization"] = fmt::format("Bearer {}", cfg.api_key);
+  }
+  for (const auto& [key, value] : cfg.headers)
+  {
+    headers[key] = value;
+  }
+
+  session.SetUrl(cpr::Url{cfg.base_url + std::string{path}});
+  session.SetHeader(headers);
+  session.SetConnectTimeout(cpr::ConnectTimeout{cfg.connect_timeout});
+  session.SetTimeout(cpr::Timeout{cfg.request_timeout});
 }
 
-static std::string roleToString(Role role)
+cpr::Response perform(cpr::Session& session, Method method)
 {
-  switch (role)
+  switch (method)
   {
-    case Role::SYSTEM:
-      return "system";
-    case Role::USER:
-      return "user";
-    case Role::ASSISTANT:
-      return "assistant";
-    case Role::TOOL:
-      return "tool";
+    case Method::GET:
+      return session.Get();
+    case Method::DELETE:
+      return session.Delete();
+    case Method::POST:
+      break;
   }
-  return "user";
+  return session.Post();
 }
 
-static json messageToJson(const Message& msg)
+// Transport failure or non-2xx -> ApiError; otherwise the body.
+std::expected<std::string, ApiError> checked(cpr::Response resp)
 {
-  json j;
-  j["role"] = roleToString(msg.role);
-
-  // Tool result messages use a plain string content.
-  if (msg.role == Role::TOOL)
+  if (resp.error.code != cpr::ErrorCode::OK)
   {
-    if (!msg.content.empty())
-    {
-      if (const auto* t = std::get_if<TextBlock>(&msg.content[0]))
-      {
-        j["content"] = t->text;
-      }
-    }
-    else
-    {
-      j["content"] = "";
-    }
-    if (msg.tool_call_id)
-    {
-      j["tool_call_id"] = *msg.tool_call_id;
-    }
-    if (msg.name)
-    {
-      j["name"] = *msg.name;
-    }
-    return j;
+    return std::unexpected{ApiError{.http_status = 0,
+                                    .message = fmt::format("HTTP error: {}", resp.error.message),
+                                    .type    = {},
+                                    .code    = {}}};
   }
-
-  // Assistant messages that requested tool calls must carry tool_calls back.
-  if (msg.role == Role::ASSISTANT && !msg.tool_calls.empty())
+  const auto STATUS = static_cast<int>(resp.status_code);
+  if (STATUS < 200 || STATUS >= 300)
   {
-    j["content"] = nullptr; // null content is valid when tool_calls present
-    json tc_arr  = json::array();
-    for (const auto& tc : msg.tool_calls)
-    {
-      tc_arr.push_back(
-        {{"id", tc.id},
-         {"type", "function"},
-         {"function", {{"name", tc.function_name}, {"arguments", tc.arguments_json}}}});
-    }
-    j["tool_calls"] = std::move(tc_arr);
-    return j;
+    return std::unexpected{detail::parseApiError(STATUS, resp.text)};
   }
-
-  // Normal text/multimodal content.
-  if (msg.content.size() == 1 && std::holds_alternative<TextBlock>(msg.content[0]))
-  {
-    j["content"] = std::get<TextBlock>(msg.content[0]).text;
-  }
-  else
-  {
-    json arr = json::array();
-    for (const auto& block : msg.content)
-    {
-      arr.push_back(contentBlockToJson(block));
-    }
-    j["content"] = std::move(arr);
-  }
-
-  return j;
+  return std::move(resp.text);
 }
 
-static json toolDefinitionToJson(const ToolDefinition& def)
+ApiError parseError(const std::exception& e)
 {
-  return {{"type", "function"},
-          {"function",
-           {{"name", def.name},
-            {"description", def.description},
-            {"parameters", json::parse(def.parameters_schema_json)}}}};
+  return ApiError{
+    .http_status = 0, .message = fmt::format("JSON error: {}", e.what()), .type = {}, .code = {}};
 }
 
-// ---------------------------------------------------------------------------
-// Response parsing
-// ---------------------------------------------------------------------------
-
-static std::expected<CompletionResponse, ApiError> parseResponse(int http_status,
-                                                                 const std::string& body)
+std::expected<json, ApiError>
+sendJson(const detail::ClientConfig& cfg, Method method, std::string_view path, const json& body)
 {
-  if (http_status < 200 || http_status >= 300)
+  cpr::Session session;
+  configure(session,
+            cfg,
+            {.path         = path,
+             .content_type = body.is_null() ? "" : "application/json",
+             .accept       = "application/json"});
+  if (!body.is_null())
   {
-    std::string msg;
-    try
-    {
-      auto j = json::parse(body);
-      msg    = j.value("/error/message"_json_pointer, body);
-    }
-    catch (...)
-    {
-      msg = body;
-    }
-    return std::unexpected{ApiError{http_status, std::move(msg)}};
+    session.SetBody(cpr::Body{body.dump()});
   }
-
+  auto text = checked(perform(session, method));
+  if (!text)
+  {
+    return std::unexpected{std::move(text.error())};
+  }
+  if (text->empty())
+  {
+    return json{};
+  }
   try
   {
-    const auto J = json::parse(body);
-
-    CompletionResponse resp;
-    resp.id                = J.value("id", "");
-    resp.prompt_tokens     = J.value("/usage/prompt_tokens"_json_pointer, 0);
-    resp.completion_tokens = J.value("/usage/completion_tokens"_json_pointer, 0);
-
-    const auto& choice        = J.at("choices").at(0);
-    resp.choice.finish_reason = choice.value("finish_reason", "stop");
-
-    const auto& api_msg = choice.at("message");
-
-    if (api_msg.contains("content") && !api_msg["content"].is_null())
-    {
-      resp.choice.content = api_msg["content"].get<std::string>();
-    }
-
-    if (api_msg.contains("tool_calls") && api_msg["tool_calls"].is_array())
-    {
-      for (const auto& tc : api_msg["tool_calls"])
-      {
-        ToolCall call;
-        call.id             = tc.value("id", "");
-        call.function_name  = tc.value("/function/name"_json_pointer, "");
-        call.arguments_json = tc.value("/function/arguments"_json_pointer, "{}");
-        resp.choice.tool_calls.push_back(std::move(call));
-      }
-    }
-
-    return resp;
+    return json::parse(*text);
   }
   catch (const json::exception& e)
   {
-    return std::unexpected{ApiError{http_status, fmt::format("JSON parse error: {}", e.what())}};
+    return std::unexpected{parseError(e)};
   }
 }
 
+// Build a request body and parse the response JSON, mapping JSON exceptions to ApiError.
+template <typename TBuild, typename TParse>
+auto postAndParse(const detail::ClientConfig& cfg,
+                  std::string_view path,
+                  TBuild&& build,
+                  TParse&& parse) -> std::expected<decltype(parse(json{})), ApiError>
+{
+  json body;
+  try
+  {
+    body = build();
+  }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{parseError(e)};
+  }
+  auto resp = sendJson(cfg, Method::POST, path, body);
+  if (!resp)
+  {
+    return std::unexpected{std::move(resp.error())};
+  }
+  try
+  {
+    return parse(*resp);
+  }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{parseError(e)};
+  }
+}
+
+// POST body with stream=true and dispatch each JSON event. on_event returns false to cancel.
+std::expected<void, ApiError> streamJson(const detail::ClientConfig& cfg,
+                                         std::string_view path,
+                                         json body,
+                                         const std::function<bool(const json&)>& on_event)
+{
+  body["stream"] = true;
+  cpr::Session session;
+  configure(session,
+            cfg,
+            {.path = path, .content_type = "application/json", .accept = "text/event-stream"});
+  session.SetBody(cpr::Body{body.dump()});
+
+  detail::SseParser parser;
+  std::string error_body;
+  std::optional<ApiError> stream_error;
+  bool cancelled = false;
+  bool done      = false;
+
+  const detail::SseParser::DataCallback ON_DATA = [&](std::string_view data) {
+    if (done || data == "[DONE]")
+    {
+      done = true;
+      return true;
+    }
+    try
+    {
+      const auto J = json::parse(data);
+      if ((J.contains("error") && !J["error"].is_null()) || J.value("type", "") == "error")
+      {
+        stream_error = detail::parseApiError(0, std::string{data});
+        if (stream_error->message == data && J.contains("message"))
+        {
+          stream_error->message = J.value("message", std::string{data});
+        }
+        return false;
+      }
+      if (!on_event(J))
+      {
+        cancelled = true;
+        return false;
+      }
+      return true;
+    }
+    catch (const json::exception& e)
+    {
+      stream_error = parseError(e);
+      return false;
+    }
+  };
+
+  session.SetWriteCallback(cpr::WriteCallback{[&](std::string_view data, intptr_t) {
+    if (error_body.size() < MAX_ERROR_BODY)
+    {
+      error_body.append(data.substr(0, MAX_ERROR_BODY - error_body.size()));
+    }
+    return parser.feed(data, ON_DATA);
+  }});
+
+  auto resp = session.Post();
+  if (stream_error)
+  {
+    return std::unexpected{std::move(*stream_error)};
+  }
+  if (cancelled)
+  {
+    return {};
+  }
+  resp.text = std::move(error_body); // so checked() can parse an HTTP error body
+  if (auto ok = checked(std::move(resp)); !ok)
+  {
+    return std::unexpected{std::move(ok.error())};
+  }
+  parser.finish(ON_DATA);
+  if (stream_error)
+  {
+    return std::unexpected{std::move(*stream_error)};
+  }
+  return {};
+}
+
+std::expected<Transcription, ApiError> postAudio(const detail::ClientConfig& cfg,
+                                                 std::string_view path,
+                                                 const TranscriptionRequest& req,
+                                                 bool with_language)
+{
+  if (req.file_path.empty() && req.audio.empty())
+  {
+    return std::unexpected{ApiError{.http_status = 0,
+                                    .message     = "TranscriptionRequest needs file_path or audio",
+                                    .type        = {},
+                                    .code        = {}}};
+  }
+  cpr::Multipart form{{"model", req.model.empty() ? cfg.model : req.model}};
+  if (!req.file_path.empty())
+  {
+    form.parts.emplace_back("file", cpr::Files{cpr::File{req.file_path}});
+  }
+  else
+  {
+    form.parts.emplace_back(
+      "file", cpr::Buffer{req.audio.begin(), req.audio.end(), std::filesystem::path{req.filename}});
+  }
+  if (with_language && req.language)
+  {
+    form.parts.emplace_back("language", *req.language);
+  }
+  if (req.prompt)
+  {
+    form.parts.emplace_back("prompt", *req.prompt);
+  }
+  if (req.response_format)
+  {
+    form.parts.emplace_back("response_format", *req.response_format);
+  }
+  if (req.temperature)
+  {
+    form.parts.emplace_back("temperature", fmt::format("{}", *req.temperature));
+  }
+  for (const auto& g : req.timestamp_granularities)
+  {
+    form.parts.emplace_back("timestamp_granularities[]", g);
+  }
+  json extra = json::object();
+  detail::applyExtraBody(extra, cfg.extra_body, req.extra_body);
+  for (const auto& [key, value] : extra.items())
+  {
+    if (value.is_primitive() && !value.is_null())
+    {
+      form.parts.emplace_back(key, value.is_string() ? value.get<std::string>() : value.dump());
+    }
+  }
+
+  cpr::Session session;
+  configure(session, cfg, {.path = path, .content_type = "", .accept = "application/json"});
+  session.SetMultipart(std::move(form));
+  auto text = checked(session.Post());
+  if (!text)
+  {
+    return std::unexpected{std::move(text.error())};
+  }
+  // text / srt / vtt formats return a plain body.
+  try
+  {
+    auto j = json::parse(*text);
+    return Transcription{.text = j.value("text", ""), .raw = std::move(j)};
+  }
+  catch (const json::exception&)
+  {
+    return Transcription{.text = std::move(*text), .raw = {}};
+  }
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
-// OpenAIClient implementation
+// OpenAIClient
 // ---------------------------------------------------------------------------
 
 OpenAIClient::OpenAIClient(detail::ClientConfig config)
@@ -193,103 +311,211 @@ OpenAIClient::OpenAIClient(detail::ClientConfig config)
 {
 }
 
-std::expected<void, ApiError> OpenAIClient::isHealthy()
+std::expected<ChatResponse, ApiError> OpenAIClient::chat(const ChatRequest& request) const
 {
-  cpr::Header headers{{"Accept", "application/json"}};
-  if (!m_config.api_key.empty())
-  {
-    headers["Authorization"] = fmt::format("Bearer {}", m_config.api_key);
-  }
+  return postAndParse(
+    m_config,
+    "/chat/completions",
+    [&] { return detail::chatRequestToJson(request, m_config); },
+    detail::parseChatResponse);
+}
 
-  const std::string URL = m_config.base_url + "/models";
-  const auto CPR_RESP   = cpr::Get(cpr::Url{URL},
-                                 headers,
-                                 cpr::ConnectTimeout{m_config.connect_timeout},
-                                 cpr::Timeout{m_config.request_timeout});
-
-  if (CPR_RESP.error.code != cpr::ErrorCode::OK)
-  {
-    return std::unexpected{
-      ApiError{.http_status = 0, .message = fmt::format("HTTP error: {}", CPR_RESP.error.message)}};
-  }
-
-  if (CPR_RESP.status_code < 200 || CPR_RESP.status_code >= 300)
-  {
-    return std::unexpected{
-      ApiError{.http_status = static_cast<int>(CPR_RESP.status_code),
-               .message     = fmt::format("server returned {}", CPR_RESP.status_code)}};
-  }
-
+std::expected<void, ApiError> OpenAIClient::chatStream(const ChatRequest& request,
+                                                       ChunkCallback on_chunk) const
+{
+  json body;
   try
   {
-    const auto J = json::parse(CPR_RESP.text);
-    for (const auto& model : J.at("data"))
-    {
-      if (model.value("id", "") == m_config.model)
-      {
-        return {};
-      }
-    }
+    body                   = detail::chatRequestToJson(request, m_config);
+    body["stream_options"] = {{"include_usage", true}};
   }
   catch (const json::exception& e)
   {
-    return std::unexpected{
-      ApiError{.http_status = 0, .message = fmt::format("JSON parse error: {}", e.what())}};
+    return std::unexpected{parseError(e)};
   }
-
-  return std::unexpected{ApiError{
-    .http_status = 0, .message = fmt::format("model '{}' not found on server", m_config.model)}};
+  return streamJson(m_config, "/chat/completions", std::move(body), [&](const json& j) {
+    return on_chunk(detail::parseChatChunk(j));
+  });
 }
 
 std::expected<CompletionResponse, ApiError>
-OpenAIClient::complete(const std::vector<Message>& messages,
-                       const std::vector<ToolDefinition>& tools)
+OpenAIClient::completion(const CompletionRequest& request) const
+{
+  return postAndParse(
+    m_config,
+    "/completions",
+    [&] { return detail::completionRequestToJson(request, m_config); },
+    detail::parseCompletionResponse);
+}
+
+std::expected<EmbeddingResponse, ApiError>
+OpenAIClient::embeddings(const EmbeddingRequest& request) const
+{
+  return postAndParse(
+    m_config,
+    "/embeddings",
+    [&] { return detail::embeddingRequestToJson(request, m_config); },
+    detail::parseEmbeddingResponse);
+}
+
+std::expected<std::vector<Model>, ApiError> OpenAIClient::listModels() const
+{
+  auto resp = sendJson(m_config, Method::GET, "/models", nullptr);
+  if (!resp)
+  {
+    return std::unexpected{std::move(resp.error())};
+  }
+  try
+  {
+    std::vector<Model> models;
+    for (const auto& m : resp->at("data"))
+    {
+      models.push_back(detail::parseModel(m));
+    }
+    return models;
+  }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{parseError(e)};
+  }
+}
+
+std::expected<Model, ApiError> OpenAIClient::retrieveModel(std::string_view id) const
+{
+  auto resp = sendJson(m_config, Method::GET, fmt::format("/models/{}", id), nullptr);
+  if (!resp)
+  {
+    return std::unexpected{std::move(resp.error())};
+  }
+  try
+  {
+    return detail::parseModel(*resp);
+  }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{parseError(e)};
+  }
+}
+
+std::expected<void, ApiError> OpenAIClient::isHealthy() const
+{
+  auto models = listModels();
+  if (!models)
+  {
+    return std::unexpected{std::move(models.error())};
+  }
+  for (const auto& m : *models)
+  {
+    if (m.id == m_config.model)
+    {
+      return {};
+    }
+  }
+  return std::unexpected{
+    ApiError{.http_status = 0,
+             .message     = fmt::format("model '{}' not found on server", m_config.model),
+             .type        = {},
+             .code        = {}}};
+}
+
+std::expected<Response, ApiError> OpenAIClient::createResponse(const ResponseRequest& request) const
+{
+  return postAndParse(
+    m_config,
+    "/responses",
+    [&] { return detail::responseRequestToJson(request, m_config); },
+    detail::parseResponse);
+}
+
+std::expected<void, ApiError> OpenAIClient::createResponseStream(const ResponseRequest& request,
+                                                                 EventCallback on_event) const
 {
   json body;
-  body["model"]       = m_config.model;
-  body["temperature"] = m_config.temperature;
-  body["max_tokens"]  = m_config.max_tokens;
-
-  json msgs = json::array();
-  for (const auto& m : messages)
+  try
   {
-    msgs.push_back(messageToJson(m));
+    body = detail::responseRequestToJson(request, m_config);
   }
-  body["messages"] = std::move(msgs);
-
-  if (!tools.empty())
+  catch (const json::exception& e)
   {
-    json tool_arr = json::array();
-    for (const auto& t : tools)
-    {
-      tool_arr.push_back(toolDefinitionToJson(t));
-    }
-    body["tools"]       = std::move(tool_arr);
-    body["tool_choice"] = "auto";
+    return std::unexpected{parseError(e)};
   }
+  return streamJson(m_config, "/responses", std::move(body), [&](const json& j) {
+    return on_event(ResponseEvent{.type = j.value("type", ""), .data = j});
+  });
+}
 
-  cpr::Header headers{
-    {"Content-Type", "application/json"},
-    {"Accept", "application/json"},
-  };
-  if (!m_config.api_key.empty())
+std::expected<Response, ApiError> OpenAIClient::retrieveResponse(std::string_view id) const
+{
+  auto resp = sendJson(m_config, Method::GET, fmt::format("/responses/{}", id), nullptr);
+  if (!resp)
   {
-    headers["Authorization"] = fmt::format("Bearer {}", m_config.api_key);
+    return std::unexpected{std::move(resp.error())};
   }
-
-  const std::string URL = m_config.base_url + "/chat/completions";
-  const auto CPR_RESP   = cpr::Post(cpr::Url{URL},
-                                  headers,
-                                  cpr::Body{body.dump()},
-                                  cpr::ConnectTimeout{m_config.connect_timeout},
-                                  cpr::Timeout{m_config.request_timeout});
-
-  if (CPR_RESP.error.code != cpr::ErrorCode::OK)
+  try
   {
-    return std::unexpected{ApiError{0, fmt::format("HTTP error: {}", CPR_RESP.error.message)}};
+    return detail::parseResponse(*resp);
   }
+  catch (const json::exception& e)
+  {
+    return std::unexpected{parseError(e)};
+  }
+}
 
-  return parseResponse(static_cast<int>(CPR_RESP.status_code), CPR_RESP.text);
+std::expected<void, ApiError> OpenAIClient::deleteResponse(std::string_view id) const
+{
+  auto resp = sendJson(m_config, Method::DELETE, fmt::format("/responses/{}", id), nullptr);
+  if (!resp)
+  {
+    return std::unexpected{std::move(resp.error())};
+  }
+  return {};
+}
+
+std::expected<Transcription, ApiError>
+OpenAIClient::transcribe(const TranscriptionRequest& request) const
+{
+  return postAudio(m_config, "/audio/transcriptions", request, true);
+}
+
+std::expected<Transcription, ApiError>
+OpenAIClient::translate(const TranscriptionRequest& request) const
+{
+  return postAudio(m_config, "/audio/translations", request, false);
+}
+
+std::expected<std::string, ApiError> OpenAIClient::speech(const SpeechRequest& request) const
+{
+  cpr::Session session;
+  configure(session,
+            m_config,
+            {.path = "/audio/speech", .content_type = "application/json", .accept = "*/*"});
+  session.SetBody(cpr::Body{detail::speechRequestToJson(request, m_config).dump()});
+  return checked(session.Post());
+}
+
+std::expected<std::vector<ImageResult>, ApiError>
+OpenAIClient::generateImage(const ImageRequest& request) const
+{
+  return postAndParse(
+    m_config,
+    "/images/generations",
+    [&] { return detail::imageRequestToJson(request, m_config); },
+    detail::parseImages);
+}
+
+std::expected<DecisionResponse, ApiError> OpenAIClient::decide(const DecisionRequest& request) const
+{
+  return postAndParse(
+    m_config,
+    "/decisions",
+    [&] { return detail::decisionRequestToJson(request, m_config); },
+    detail::parseDecisionResponse);
+}
+
+std::expected<json, ApiError>
+OpenAIClient::request(Method method, std::string_view path, const json& body) const
+{
+  return sendJson(m_config, method, path, body);
 }
 
 } // namespace oai
