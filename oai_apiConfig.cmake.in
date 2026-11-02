@@ -17,5 +17,3 @@ find_package(ZLIB REQUIRED)
 include("${oai_api_DIR}/oai_apiTargets.cmake")
 
 # These are IMPORTED targets created by oai_apiTargets.cmake
-
-

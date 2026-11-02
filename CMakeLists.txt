@@ -1,12 +1,36 @@
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    * Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#
+#    * Redistributions in binary form must reproduce the above copyright
+#      notice, this list of conditions and the following disclaimer in the
+#      documentation and/or other materials provided with the distribution.
+#
+#    * Neither the name of the copyright holder nor the names of its
+#      contributors may be used to endorse or promote products derived from
+#      this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
 cmake_minimum_required(VERSION 3.20)
-project(oai_api)
-
-set(oai_api_MAJOR_VERSION 0)
-set(oai_api_MINOR_VERSION 1)
-set(oai_api_PATCH_VERSION 0)
-set(oai_api_VERSION
-  ${oai_api_MAJOR_VERSION}.${oai_api_MINOR_VERSION}.${oai_api_PATCH_VERSION})
-
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/package.xml" oai_api_VERSION REGEX "<version>")
+string(REGEX REPLACE ".*<version>([^<]+)</version>.*" "\\1"
+  oai_api_VERSION "${oai_api_VERSION}")
+project(oai_api VERSION "${oai_api_VERSION}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/package.xml")
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -29,7 +53,8 @@ find_package(nlohmann_json REQUIRED)
 add_library(oai_api STATIC
   src/client.cpp
   src/agent.cpp
-  src/builder.cpp)
+  src/builder.cpp
+  src/serialize.cpp)
 target_compile_features(oai_api PUBLIC cxx_std_23)
 
 target_include_directories(oai_api PUBLIC
@@ -46,6 +71,18 @@ target_link_libraries(oai_api PUBLIC
 # Example executable
 add_executable(echo_agent examples/echo_agent.cpp)
 target_link_libraries(echo_agent PRIVATE oai_api)
+
+add_executable(decisions_test examples/decisions_test.cpp)
+target_link_libraries(decisions_test PRIVATE oai_api)
+
+# Tests (no network): serialization, extra_body merging, SSE parsing
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(oai_api_test test/oai_api_test.cpp)
+  target_include_directories(oai_api_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(oai_api_test PRIVATE oai_api)
+  add_test(NAME oai_api_test COMMAND oai_api_test)
+endif()
 
 # Install
 include(GNUInstallDirs)
