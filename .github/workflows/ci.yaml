@@ -74,7 +74,7 @@ jobs:
         env:
           ROS_DISTRO: ${{ matrix.distro }}
           ROS_REPO: main
-          ADDITIONAL_DEBS: libssl-dev libcurl4-openssl-dev
+          ADDITIONAL_DEBS: git libssl-dev libcurl4-openssl-dev
           BASEDIR: ${{ github.workspace }}/.build
       - name: Upload test results
         if: always()
