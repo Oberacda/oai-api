@@ -27,6 +27,7 @@
 // Offline checks for request serialization, extra_body merging, response parsing and SSE parsing.
 
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -286,6 +287,140 @@ static void testDecisionsOpenRouter()
   CHECK(RESP.usage.input_tokens == 476 && RESP.usage.cost.value_or(0) == 0.000019992);
 }
 
+static void testDecisionsOllama()
+{
+  DecisionRequest req{.format = DecisionFormat::OLLAMA, .model = "nimble"};
+  req.input =
+    std::vector<Message>{Message{Role::USER,
+                                 {TextBlock{"Ticket text."},
+                                  JsonBlock{{{"priority", "high"}}},
+                                  ImageBlock{.base64_data = "PNG-A", .mime_type = "image/png"},
+                                  ImageBlock{.base64_data = "JPEG-B", .mime_type = "image/jpeg"}},
+                                 {},
+                                 {},
+                                 {}}};
+  req.questions = {
+    PredicateQuestion{.name           = "urgent",
+                      .instructions   = "Needs attention today?",
+                      .true_criteria  = "The ticket is urgent.",
+                      .false_criteria = "The ticket can wait."},
+    ChoiceQuestion{.name         = "team",
+                   .instructions = std::vector<ContentBlock>{TextBlock{"Choose a team."},
+                                                             TextBlock{"Use the ticket context."}},
+                   .choices      = {{"billing", "Payments"}, {"support", ""}}},
+    ScoreQuestion{.name         = "severity",
+                  .instructions = std::vector<ContentBlock>{TextBlock{"How severe is it?"},
+                                                            JsonBlock{{{"field", "severity"}}}},
+                  .levels       = {{"Low", "Minor impact"}, {"High", "Major impact"}}},
+  };
+  req.prompt_cache_key = "must-be-omitted";
+  req.extra_body       = {{"keep_alive", "5m"}, {"route", nullptr}};
+
+  const auto J = detail::decisionRequestToJson(req, makeConfig());
+  CHECK(J["model"] == "nimble");
+  CHECK(J["state"].is_array());
+  CHECK(J["state"].size() == 2);
+  CHECK(J["state"][0] == "Ticket text.");
+  CHECK(J["state"][1]["priority"] == "high");
+  CHECK(J["images"] == json::array({"PNG-A", "JPEG-B"}));
+  CHECK(!J.contains("input") && !J.contains("prompt_cache_key"));
+  CHECK(J["questions"].is_object());
+  CHECK(J["questions"]["urgent"]["type"] == "noul");
+  CHECK(J["questions"]["urgent"]["criteria"]["true"] == "The ticket is urgent.");
+  CHECK(J["questions"]["team"]["instructions"].is_array());
+  CHECK(J["questions"]["team"]["instructions"][0] == "Choose a team.");
+  CHECK(J["questions"]["team"]["instructions"][1] == "Use the ticket context.");
+  CHECK(J["questions"]["team"]["criteria"]["billing"] == "Payments");
+  CHECK(J["questions"]["team"]["criteria"]["support"].is_null());
+  CHECK(J["questions"]["severity"]["instructions"][0] == "How severe is it?");
+  CHECK(J["questions"]["severity"]["instructions"][1]["field"] == "severity");
+  CHECK(J["questions"]["severity"]["criteria"][0] == "Low: Minor impact");
+  CHECK(J["provider"]["order"][0] == "anthropic");
+  CHECK(J["keep_alive"] == "5m");
+  CHECK(!J.contains("route"));
+
+  DecisionRequest string_state_req{.format = DecisionFormat::OLLAMA, .model = "nimble"};
+  string_state_req.input     = "A plain text state";
+  string_state_req.questions = {PredicateQuestion{.name = "urgent", .instructions = "Urgent?"}};
+  const auto STRING_STATE    = detail::decisionRequestToJson(string_state_req, makeConfig());
+  CHECK(STRING_STATE["state"] == "A plain text state");
+  CHECK(!STRING_STATE.contains("images"));
+
+  bool threw = false;
+  try
+  {
+    DecisionRequest image_url_req{.format = DecisionFormat::OLLAMA};
+    image_url_req.input = std::vector<Message>{
+      Message{Role::USER, {imageFromUrl("https://example.com/a.png")}, {}, {}, {}}};
+    (void)detail::decisionRequestToJson(image_url_req, makeConfig());
+  }
+  catch (const std::invalid_argument&)
+  {
+    threw = true;
+  }
+  CHECK(threw);
+
+  DecisionRequest public_url_req{.format = DecisionFormat::OLLAMA};
+  public_url_req.input = std::vector<Message>{
+    Message{Role::USER, {imageFromUrl("https://example.com/a.png")}, {}, {}, {}}};
+  const auto PUBLIC_RESULT =
+    ClientBuilder{}.baseUrl("http://127.0.0.1:1/v1").build().decide(public_url_req);
+  CHECK(!PUBLIC_RESULT);
+  CHECK(PUBLIC_RESULT.error().http_status == 0);
+  CHECK(PUBLIC_RESULT.error().type == "invalid_request_error");
+  CHECK(PUBLIC_RESULT.error().message ==
+        "Ollama decision images require raw base64 data, not URLs");
+
+  threw = false;
+  try
+  {
+    DecisionRequest data_url_req{.format = DecisionFormat::OLLAMA};
+    data_url_req.input = std::vector<Message>{
+      Message{Role::USER, {imageFromUrl("data:image/png;base64,AAAA")}, {}, {}, {}}};
+    (void)detail::decisionRequestToJson(data_url_req, makeConfig());
+  }
+  catch (const std::invalid_argument&)
+  {
+    threw = true;
+  }
+  CHECK(threw);
+
+  threw = false;
+  try
+  {
+    DecisionRequest bad_instructions{.format = DecisionFormat::OLLAMA};
+    bad_instructions.questions = {PredicateQuestion{
+      .name = "bad",
+      .instructions =
+        std::vector<ContentBlock>{ImageBlock{.base64_data = "PNG", .mime_type = "image/png"}}}};
+    (void)detail::decisionRequestToJson(bad_instructions, makeConfig());
+  }
+  catch (const std::invalid_argument&)
+  {
+    threw = true;
+  }
+  CHECK(threw);
+
+  const auto RESP = detail::parseDecisionResponse(json::parse(R"({
+    "model":"nimble",
+    "answers":{
+      "severity":{"type":"score","score":0.75,"confidence":0.8,
+                   "probabilities":{"0":0.25,"1":0.75},
+                   "legend":{"0":"Low","1":"High"}},
+      "urgent":{"type":"noul","noul":0.91},
+      "team":{"type":"choice","choice":"billing",
+               "probabilities":{"billing":0.8,"support":0.2},"confidence":0.7}},
+    "usage":{"input_tokens":17,"output_tokens":3}})"),
+                                                  {"team", "urgent", "severity"});
+  CHECK(RESP.model == "nimble");
+  CHECK(RESP.answers.size() == 3);
+  CHECK(RESP.answers[0].name == "team");
+  CHECK(RESP.answers[1].type == "predicate" && RESP.answers[1].probability.value_or(0) == 0.91);
+  CHECK(RESP.answers[2].score.value_or(0) == 0.75);
+  CHECK(RESP.answers[2].probabilities[1].label == "High");
+  CHECK(RESP.usage.input_tokens == 17 && RESP.usage.output_tokens == 3);
+}
+
 static void testErrors()
 {
   auto e = detail::parseApiError(
@@ -337,6 +472,7 @@ int main()
   testResponses();
   testDecisions();
   testDecisionsOpenRouter();
+  testDecisionsOllama();
   testErrors();
   testSse();
   fmt::print("oai_api_test: all checks passed\n");

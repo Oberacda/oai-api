@@ -105,6 +105,49 @@ auto msg = oai::MessageBuilder::user()
     .build();
 ```
 
+### Ollama decisions
+
+Use [Ollama's Decision API](https://docs.ollama.com/capabilities/decision) with a System One model:
+
+```cpp
+auto client = oai::ClientBuilder{}
+    .baseUrl("http://localhost:11434/v1")
+    .build();
+
+oai::DecisionRequest request{
+    .format = oai::DecisionFormat::OLLAMA,
+    .model = "nimble",
+    .input = "I was charged twice. Please refund the extra payment.",
+    .questions = {
+        oai::PredicateQuestion{
+            .name = "refund",
+            .instructions = "Is the customer requesting a refund?"},
+    },
+};
+auto result = client.decide(request); // POST /v1/systemone
+if (result) {
+    std::println("Refund probability: {}", result->answers[0].probability.value_or(0));
+}
+```
+
+Local requests need no API key. Choice and score questions use the existing `ChoiceQuestion`
+and `ScoreQuestion` types; yes/no answers are normalized to `predicate`. Use `extra_body`
+for Ollama options such as `keep_alive`.
+
+For structured state or images, supply `std::vector<oai::Message>` as `input`. Text and JSON
+blocks form the state array; encoded image blocks are sent separately in `images`, in order.
+Images are shared by all questions and require a vision model such as `clef-flash`.
+Ollama rejects image URLs and images in question instructions. The library reports these as
+`ApiError` before sending the request. A base URL of `https://ollama.com/v1` and an API key
+can be used for direct cloud requests.
+
+The bundled example exercises text, JSON, images, and all three question types:
+
+```bash
+ollama pull clef-flash
+OAI_FORMAT=ollama ./build/decisions_test
+```
+
 ## API reference
 
 ### `ClientBuilder`

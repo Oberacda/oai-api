@@ -29,10 +29,13 @@
 //   OAI_API_KEY=sk-or-... ./decisions_test                       # OpenRouter (default)
 //   OAI_API_KEY=sk-... OAI_BASE_URL=https://api.openai.com/v1 OAI_MODEL=gpt-6-luna \
 //     ./decisions_test                                           # OpenAI directly
+//   OAI_FORMAT=ollama ./decisions_test                            # Local Ollama + clef-flash
 //
-// Env vars: OAI_API_KEY (required), OAI_BASE_URL (default https://openrouter.ai/api/alpha),
+// Env vars: OAI_API_KEY (optional for Ollama), OAI_BASE_URL (default
+// https://openrouter.ai/api/alpha),
 //           OAI_MODEL (default openai/gpt-6-luna-decisions).
-// The OpenRouter wire format is used when the base URL contains "openrouter", else OpenAI's.
+// OAI_FORMAT=ollama defaults to http://localhost:11434/v1 and clef-flash.
+// Otherwise the format is OpenRouter when the base URL contains "openrouter", else OpenAI.
 
 #include <cstdlib>
 #include <string>
@@ -51,11 +54,14 @@ static std::string envOr(const char* name, std::string fallback)
 
 int main()
 {
-  const std::string API_KEY  = envOr("OAI_API_KEY", "");
-  const std::string BASE_URL = envOr("OAI_BASE_URL", "https://openrouter.ai/api/alpha");
-  const std::string MODEL    = envOr("OAI_MODEL", "openai/gpt-6-luna-decisions");
-  const bool OPENROUTER      = BASE_URL.find("openrouter") != std::string::npos;
-  if (API_KEY.empty())
+  const bool OLLAMA         = envOr("OAI_FORMAT", "") == "ollama";
+  const std::string API_KEY = envOr("OAI_API_KEY", "");
+  const std::string BASE_URL =
+    envOr("OAI_BASE_URL", OLLAMA ? "http://localhost:11434/v1" : "https://openrouter.ai/api/alpha");
+  const std::string MODEL =
+    envOr("OAI_MODEL", OLLAMA ? "clef-flash" : "openai/gpt-6-luna-decisions");
+  const bool OPENROUTER = BASE_URL.find("openrouter") != std::string::npos;
+  if (API_KEY.empty() && !OLLAMA)
   {
     fmt::print(stderr, "Set OAI_API_KEY (see the comment at the top of decisions_test.cpp).\n");
     return 2;
@@ -89,7 +95,8 @@ int main()
   }
 
   oai::DecisionRequest req{
-    .format = OPENROUTER ? oai::DecisionFormat::OPENROUTER : oai::DecisionFormat::OPENAI,
+    .format = OLLAMA ? oai::DecisionFormat::OLLAMA
+                     : (OPENROUTER ? oai::DecisionFormat::OPENROUTER : oai::DecisionFormat::OPENAI),
     .model  = MODEL,
     .input  = std::vector<oai::Message>{std::move(*evidence)},
     .questions =
@@ -114,10 +121,11 @@ int main()
       },
   };
 
-  fmt::print("POST {}/decisions  model={}  format={}\n\n",
+  fmt::print("POST {}/{}  model={}  format={}\n\n",
              BASE_URL,
+             OLLAMA ? "systemone" : "decisions",
              MODEL,
-             OPENROUTER ? "openrouter" : "openai");
+             OLLAMA ? "ollama" : (OPENROUTER ? "openrouter" : "openai"));
   auto resp = client.decide(req);
   if (!resp)
   {

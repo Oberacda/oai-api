@@ -26,15 +26,17 @@
 
 #pragma once
 
-// Decisions API: POST /decisions. Evaluates questions against shared input and returns typed
+// Decisions API: POST /decisions (Ollama: /systemone). Evaluates shared input and returns typed
 // answers (probability, choice from a fixed set, or score on ordered levels).
 //
-// Two wire formats share these types:
+// Three wire formats share these types:
 //   OPENAI      base_url https://api.openai.com/v1, model "gpt-6-luna"
 //               https://developers.openai.com/api/docs/guides/decisions
 //   OPENROUTER  base_url https://openrouter.ai/api/alpha, model e.g. "openai/gpt-6-luna-decisions"
 //               https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
-// Answers are normalized: OpenRouter "noul" answers come back as type "predicate".
+//   OLLAMA      base_url http://localhost:11434/v1, model e.g. "clef-flash"
+//               POST /systemone; https://docs.ollama.com/api/systemone
+// Answers are normalized: OpenRouter/Ollama "noul" answers come back as type "predicate".
 
 #include <cstdint>
 #include <optional>
@@ -54,7 +56,8 @@ using DecisionInstructions = std::variant<std::string, std::vector<ContentBlock>
 enum class DecisionFormat : std::uint8_t
 {
   OPENAI,
-  OPENROUTER
+  OPENROUTER,
+  OLLAMA
 };
 
 // Probability that the condition is true.
@@ -62,7 +65,7 @@ struct PredicateQuestion
 {
   std::string name{};
   DecisionInstructions instructions{};
-  // OpenRouter only (required there as noul criteria): what counts as true / false.
+  // OpenRouter/Ollama noul criteria: what counts as true / false.
   std::string true_criteria{"Yes"};
   std::string false_criteria{"No"};
 };
@@ -101,8 +104,10 @@ struct DecisionRequest
 {
   DecisionFormat format{DecisionFormat::OPENAI};
   std::string model{"gpt-6-luna"};
-  std::variant<std::string, std::vector<Message>> input{}; // JsonBlock -> input_json (user only)
-  std::vector<DecisionQuestion> questions{};               // 1..400
+  // Ollama: text/JSON blocks become state items; base64 images are shared by all questions.
+  // Image URLs and images in question instructions are unsupported by Ollama.
+  std::variant<std::string, std::vector<Message>> input{}; // JsonBlock -> input_json (OpenAI)
+  std::vector<DecisionQuestion> questions{};               // provider-specific limits
   std::optional<std::string> prompt_cache_key{};           // OpenAI only
   nlohmann::json extra_body{};                             // e.g. OpenRouter {"provider": {...}}
 };

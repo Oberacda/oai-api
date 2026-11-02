@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -690,7 +691,7 @@ json openRouterPart(const ContentBlock& block)
     block);
 }
 
-json openRouterInstructions(const DecisionInstructions& instructions)
+json openRouterInstructions(const DecisionInstructions& instructions, bool ollama = false)
 {
   if (const auto* s = std::get_if<std::string>(&instructions))
   {
@@ -699,12 +700,17 @@ json openRouterInstructions(const DecisionInstructions& instructions)
   json arr = json::array();
   for (const auto& block : std::get<std::vector<ContentBlock>>(instructions))
   {
+    if (ollama && std::holds_alternative<ImageBlock>(block))
+    {
+      throw std::invalid_argument("Ollama decision images must be in the shared input");
+    }
     arr.push_back(openRouterPart(block));
   }
   return arr;
 }
 
-json openRouterState(const std::variant<std::string, std::vector<Message>>& input)
+json decisionState(const std::variant<std::string, std::vector<Message>>& input,
+                   json* images = nullptr)
 {
   if (const auto* s = std::get_if<std::string>(&input))
   {
@@ -715,6 +721,17 @@ json openRouterState(const std::variant<std::string, std::vector<Message>>& inpu
   {
     for (const auto& block : msg.content)
     {
+      if (const auto* image = std::get_if<ImageBlock>(&block);
+          images != nullptr && image != nullptr)
+      {
+        if (!image->url.empty() || image->base64_data.empty() ||
+            image->base64_data.starts_with("data:"))
+        {
+          throw std::invalid_argument("Ollama decision images require raw base64 data, not URLs");
+        }
+        images->push_back(image->base64_data);
+        continue;
+      }
       arr.push_back(openRouterPart(block));
     }
   }
@@ -764,12 +781,13 @@ json openAiQuestion(const DecisionQuestion& q)
     q);
 }
 
-json openRouterQuestion(const DecisionQuestion& q)
+json keyedQuestion(const DecisionQuestion& q, DecisionFormat format)
 {
   return std::visit(
-    [](const auto& question) -> json {
-      using T = std::decay_t<decltype(question)>;
-      json out{{"instructions", openRouterInstructions(question.instructions)}};
+    [format](const auto& question) -> json {
+      using T           = std::decay_t<decltype(question)>;
+      const bool OLLAMA = format == DecisionFormat::OLLAMA;
+      json out{{"instructions", openRouterInstructions(question.instructions, OLLAMA)}};
       if constexpr (std::is_same_v<T, PredicateQuestion>)
       {
         out["type"]     = "noul";
@@ -819,7 +837,7 @@ DecisionAnswer parseAnswer(const json& a, std::string name)
   {
     ans.choice = a["choice"].get<std::string>();
   }
-  if (ans.type == "noul") // OpenRouter yes/no -> predicate
+  if (ans.type == "noul") // OpenRouter/Ollama yes/no -> predicate
   {
     ans.type        = "predicate";
     ans.probability = optDouble(a, "noul");
@@ -879,15 +897,21 @@ json decisionRequestToJson(const DecisionRequest& req, const ClientConfig& cfg)
 {
   json body;
   body["model"] = modelOr(req.model, cfg);
-  if (req.format == DecisionFormat::OPENROUTER)
+  if (req.format == DecisionFormat::OPENROUTER || req.format == DecisionFormat::OLLAMA)
   {
-    body["state"]     = openRouterState(req.input);
+    json images = json::array();
+    body["state"] =
+      decisionState(req.input, req.format == DecisionFormat::OLLAMA ? &images : nullptr);
+    if (!images.empty())
+    {
+      body["images"] = std::move(images);
+    }
     body["questions"] = json::object();
     for (const auto& q : req.questions)
     {
       const auto& name =
         std::visit([](const auto& question) -> const std::string& { return question.name; }, q);
-      body["questions"][name] = openRouterQuestion(q);
+      body["questions"][name] = keyedQuestion(q, req.format);
     }
   }
   else

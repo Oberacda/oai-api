@@ -27,6 +27,7 @@
 #include "oai_api/client.hpp"
 
 #include <filesystem>
+#include <stdexcept>
 
 #include <cpr/cpr.h>
 #include <fmt/core.h>
@@ -157,6 +158,11 @@ auto postAndParse(const detail::ClientConfig& cfg,
   catch (const json::exception& e)
   {
     return std::unexpected{parseError(e)};
+  }
+  catch (const std::invalid_argument& e)
+  {
+    return std::unexpected{
+      ApiError{.http_status = 0, .message = e.what(), .type = "invalid_request_error", .code = {}}};
   }
   auto resp = sendJson(cfg, Method::POST, path, body);
   if (!resp)
@@ -533,7 +539,7 @@ std::expected<DecisionResponse, ApiError> OpenAIClient::decide(const DecisionReq
 {
   return postAndParse(
     m_config,
-    "/decisions",
+    request.format == DecisionFormat::OLLAMA ? "/systemone" : "/decisions",
     [&] { return detail::decisionRequestToJson(request, m_config); },
     [&](const json& j) {
       std::vector<std::string> order;
