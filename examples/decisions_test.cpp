@@ -30,11 +30,13 @@
 //   OAI_API_KEY=sk-... OAI_BASE_URL=https://api.openai.com/v1 OAI_MODEL=gpt-6-luna \
 //     ./decisions_test                                           # OpenAI directly
 //   OAI_FORMAT=ollama ./decisions_test                            # Local Ollama + clef-flash
+//   OAI_FORMAT=vllm ./decisions_test                              # vllm serve vllm-sr/d3-nano
 //
 // Env vars: OAI_API_KEY (optional for Ollama), OAI_BASE_URL (default
 // https://openrouter.ai/api/alpha),
 //           OAI_MODEL (default openai/gpt-6-luna-decisions).
-// OAI_FORMAT=ollama defaults to http://localhost:11434/v1 and clef-flash.
+// OAI_FORMAT=ollama defaults to http://localhost:11434/v1 and clef-flash; OAI_FORMAT=vllm to
+// http://localhost:8000/v1 and vllm-sr/d3-nano.
 // Otherwise the format is OpenRouter when the base URL contains "openrouter", else OpenAI.
 
 #include <cstdlib>
@@ -54,14 +56,21 @@ static std::string envOr(const char* name, std::string fallback)
 
 int main()
 {
-  const bool OLLAMA         = envOr("OAI_FORMAT", "") == "ollama";
-  const std::string API_KEY = envOr("OAI_API_KEY", "");
-  const std::string BASE_URL =
-    envOr("OAI_BASE_URL", OLLAMA ? "http://localhost:11434/v1" : "https://openrouter.ai/api/alpha");
-  const std::string MODEL =
-    envOr("OAI_MODEL", OLLAMA ? "clef-flash" : "openai/gpt-6-luna-decisions");
-  const bool OPENROUTER = BASE_URL.find("openrouter") != std::string::npos;
-  if (API_KEY.empty() && !OLLAMA)
+  const std::string FORMAT   = envOr("OAI_FORMAT", "");
+  const bool VLLM            = FORMAT == "vllm";
+  const bool OLLAMA          = FORMAT == "ollama";
+  const bool SYSTEM_ONE      = OLLAMA || VLLM;
+  const std::string API_KEY  = envOr("OAI_API_KEY", "");
+  const std::string BASE_URL = envOr("OAI_BASE_URL",
+                                     VLLM     ? "http://localhost:8000/v1"
+                                     : OLLAMA ? "http://localhost:11434/v1"
+                                              : "https://openrouter.ai/api/alpha");
+  const std::string MODEL    = envOr("OAI_MODEL",
+                                     VLLM     ? "vllm-sr/d3-nano"
+                                     : OLLAMA ? "clef-flash"
+                                              : "openai/gpt-6-luna-decisions");
+  const bool OPENROUTER      = BASE_URL.find("openrouter") != std::string::npos;
+  if (API_KEY.empty() && !SYSTEM_ONE)
   {
     fmt::print(stderr, "Set OAI_API_KEY (see the comment at the top of decisions_test.cpp).\n");
     return 2;
@@ -95,8 +104,10 @@ int main()
   }
 
   oai::DecisionRequest req{
-    .format = OLLAMA ? oai::DecisionFormat::OLLAMA
-                     : (OPENROUTER ? oai::DecisionFormat::OPENROUTER : oai::DecisionFormat::OPENAI),
+    .format = VLLM ? oai::DecisionFormat::VLLM
+              : OLLAMA
+                ? oai::DecisionFormat::OLLAMA
+                : (OPENROUTER ? oai::DecisionFormat::OPENROUTER : oai::DecisionFormat::OPENAI),
     .model  = MODEL,
     .input  = std::vector<oai::Message>{std::move(*evidence)},
     .questions =
@@ -123,9 +134,9 @@ int main()
 
   fmt::print("POST {}/{}  model={}  format={}\n\n",
              BASE_URL,
-             OLLAMA ? "systemone" : "decisions",
+             SYSTEM_ONE ? "systemone" : "decisions",
              MODEL,
-             OLLAMA ? "ollama" : (OPENROUTER ? "openrouter" : "openai"));
+             FORMAT.empty() ? (OPENROUTER ? "openrouter" : "openai") : FORMAT);
   auto resp = client.decide(req);
   if (!resp)
   {

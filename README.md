@@ -105,6 +105,13 @@ auto msg = oai::MessageBuilder::user()
     .build();
 ```
 
+### vLLM decisions (Decision 3.0)
+
+`vllm serve vllm-sr/d3-nano` (or any `vllm-sr/d3*` model) serves decisions only on
+`/v1/systemone`. Use `DecisionFormat::VLLM` with base URL `http://localhost:8000/v1`. The
+body matches Ollama's, but images are sent as http(s) or data URLs (URLs work too), and
+question instructions are flattened to one string. Try it with `OAI_FORMAT=vllm ./build/decisions_test`.
+
 ### Ollama decisions
 
 Use [Ollama's Decision API](https://docs.ollama.com/capabilities/decision) with a System One model:

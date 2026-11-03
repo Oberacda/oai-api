@@ -709,8 +709,10 @@ json openRouterInstructions(const DecisionInstructions& instructions, bool ollam
   return arr;
 }
 
+// images != nullptr: image blocks go to *images (Ollama: raw base64; vLLM: URL or data URL).
 json decisionState(const std::variant<std::string, std::vector<Message>>& input,
-                   json* images = nullptr)
+                   json* images    = nullptr,
+                   bool image_urls = false)
 {
   if (const auto* s = std::get_if<std::string>(&input))
   {
@@ -724,6 +726,11 @@ json decisionState(const std::variant<std::string, std::vector<Message>>& input,
       if (const auto* image = std::get_if<ImageBlock>(&block);
           images != nullptr && image != nullptr)
       {
+        if (image_urls)
+        {
+          images->push_back(imageUrl(*image));
+          continue;
+        }
         if (!image->url.empty() || image->base64_data.empty() ||
             image->base64_data.starts_with("data:"))
         {
@@ -736,6 +743,30 @@ json decisionState(const std::variant<std::string, std::vector<Message>>& input,
     }
   }
   return arr;
+}
+
+// vLLM takes instructions as one string: text blocks joined by newlines, JSON dumped.
+std::string vllmInstructions(const DecisionInstructions& instructions)
+{
+  if (const auto* s = std::get_if<std::string>(&instructions))
+  {
+    return *s;
+  }
+  std::string out;
+  for (const auto& block : std::get<std::vector<ContentBlock>>(instructions))
+  {
+    if (std::holds_alternative<ImageBlock>(block))
+    {
+      throw std::invalid_argument("vLLM decision images must be in the shared input");
+    }
+    if (!out.empty())
+    {
+      out += '\n';
+    }
+    const auto* text = std::get_if<TextBlock>(&block);
+    out += text != nullptr ? text->text : std::get<JsonBlock>(block).data.dump();
+  }
+  return out;
 }
 
 std::string levelGuidance(const DecisionLevel& level)
@@ -787,7 +818,10 @@ json keyedQuestion(const DecisionQuestion& q, DecisionFormat format)
     [format](const auto& question) -> json {
       using T           = std::decay_t<decltype(question)>;
       const bool OLLAMA = format == DecisionFormat::OLLAMA;
-      json out{{"instructions", openRouterInstructions(question.instructions, OLLAMA)}};
+      json out{{"instructions",
+                format == DecisionFormat::VLLM
+                  ? json(vllmInstructions(question.instructions))
+                  : openRouterInstructions(question.instructions, OLLAMA)}};
       if constexpr (std::is_same_v<T, PredicateQuestion>)
       {
         out["type"]     = "noul";
@@ -897,11 +931,12 @@ json decisionRequestToJson(const DecisionRequest& req, const ClientConfig& cfg)
 {
   json body;
   body["model"] = modelOr(req.model, cfg);
-  if (req.format == DecisionFormat::OPENROUTER || req.format == DecisionFormat::OLLAMA)
+  if (req.format != DecisionFormat::OPENAI)
   {
-    json images = json::array();
-    body["state"] =
-      decisionState(req.input, req.format == DecisionFormat::OLLAMA ? &images : nullptr);
+    json images       = json::array();
+    const bool VLLM   = req.format == DecisionFormat::VLLM;
+    const bool IMAGES = VLLM || req.format == DecisionFormat::OLLAMA;
+    body["state"]     = decisionState(req.input, IMAGES ? &images : nullptr, VLLM);
     if (!images.empty())
     {
       body["images"] = std::move(images);
