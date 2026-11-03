@@ -539,7 +539,9 @@ std::expected<DecisionResponse, ApiError> OpenAIClient::decide(const DecisionReq
 {
   return postAndParse(
     m_config,
-    request.format == DecisionFormat::OLLAMA ? "/systemone" : "/decisions",
+    request.format == DecisionFormat::OLLAMA || request.format == DecisionFormat::VLLM
+      ? "/systemone"
+      : "/decisions",
     [&] { return detail::decisionRequestToJson(request, m_config); },
     [&](const json& j) {
       std::vector<std::string> order;

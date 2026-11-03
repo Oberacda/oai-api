@@ -287,6 +287,43 @@ static void testDecisionsOpenRouter()
   CHECK(RESP.usage.input_tokens == 476 && RESP.usage.cost.value_or(0) == 0.000019992);
 }
 
+static void testDecisionsVllm()
+{
+  DecisionRequest req{.format = DecisionFormat::VLLM, .model = "vllm-sr/d3-nano"};
+  req.input =
+    std::vector<Message>{Message{Role::USER,
+                                 {TextBlock{"What does the image show?"},
+                                  ImageBlock{.base64_data = "PNG-A", .mime_type = "image/png"},
+                                  imageFromUrl("https://example.com/b.jpg")},
+                                 {},
+                                 {},
+                                 {}}};
+  req.questions = {
+    ChoiceQuestion{.name = "kind",
+                   .instructions =
+                     std::vector<ContentBlock>{TextBlock{"What kind?"}, JsonBlock{{{"k", 1}}}},
+                   .choices = {{"chart", "A chart"}, {"photo", ""}}},
+  };
+  const auto J = detail::decisionRequestToJson(req, makeConfig());
+  CHECK(J["state"] == json::array({"What does the image show?"}));
+  CHECK(J["images"] == json::array({"data:image/png;base64,PNG-A", "https://example.com/b.jpg"}));
+  CHECK(J["questions"]["kind"]["instructions"] == "What kind?\n{\"k\":1}");
+  CHECK(J["questions"]["kind"]["criteria"]["photo"].is_null());
+
+  // Response shape from vLLM docs (docs/models/structured_decisions_models.md).
+  const auto RESP = detail::parseDecisionResponse(
+    json::parse(R"({"id":"decision-1","object":"structured_decision","model":"vllm-sr/d3-nano",
+      "answers":{"urgent":{"type":"noul","noul":0.02,"probabilities":{"yes":0.02,"no":0.98},
+                           "confidence":0.95},
+                 "kind":{"type":"choice","choice":"chart","probabilities":{"chart":0.9,"photo":0.1},
+                         "confidence":0.85}},
+      "usage":{"input_tokens":142,"output_tokens":3}})"),
+    {"urgent", "kind"});
+  CHECK(RESP.answers.size() == 2);
+  CHECK(RESP.answers[0].type == "predicate" && RESP.answers[0].probability == 0.02);
+  CHECK(RESP.answers[1].choice == "chart" && RESP.answers[1].confidence == 0.85);
+}
+
 static void testDecisionsOllama()
 {
   DecisionRequest req{.format = DecisionFormat::OLLAMA, .model = "nimble"};
@@ -473,6 +510,7 @@ int main()
   testDecisions();
   testDecisionsOpenRouter();
   testDecisionsOllama();
+  testDecisionsVllm();
   testErrors();
   testSse();
   fmt::print("oai_api_test: all checks passed\n");

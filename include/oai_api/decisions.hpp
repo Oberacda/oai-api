@@ -36,6 +36,10 @@
 //               https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
 //   OLLAMA      base_url http://localhost:11434/v1, model e.g. "clef-flash"
 //               POST /systemone; https://docs.ollama.com/api/systemone
+//   VLLM        base_url http://localhost:8000/v1, model e.g. "vllm-sr/d3-nano"
+//               POST /systemone; Ollama's body, but images as http(s)/data URLs and string
+//               instructions. https://recipes.vllm.ai/vllm-sr/d3-nano
+//               (vLLM's /decisions is not served for classify models such as Decision 3.0.)
 // Answers are normalized: OpenRouter/Ollama "noul" answers come back as type "predicate".
 
 #include <cstdint>
@@ -57,7 +61,8 @@ enum class DecisionFormat : std::uint8_t
 {
   OPENAI,
   OPENROUTER,
-  OLLAMA
+  OLLAMA,
+  VLLM
 };
 
 // Probability that the condition is true.
@@ -65,7 +70,7 @@ struct PredicateQuestion
 {
   std::string name{};
   DecisionInstructions instructions{};
-  // OpenRouter/Ollama noul criteria: what counts as true / false.
+  // OpenRouter/Ollama/vLLM noul criteria: what counts as true / false.
   std::string true_criteria{"Yes"};
   std::string false_criteria{"No"};
 };
